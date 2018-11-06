@@ -1,8 +1,5 @@
-TARGETS =  video_test  
-#audio_test isp_test peripheral_test
-ifneq ($(filter -DPWMDAC_DRV, $(CFLAGS)),)
-	TARGETS += pwmdac_test
-endif
+TARGETS =  video_test  audio_test 
+# sys_test
 
 .PHONY: all
 all: $(TARGETS)
@@ -13,8 +10,7 @@ clean:
 
 $(TARGETS): %: %.o
 	@echo -e "\033[32mmake $@ \033[0m"
-#	echo "111"
-#	echo $(LINKOPT)
+	echo $(CFLAGS)
 #	echo $(PREFIX)/libs
 	$(CC) -o $@ $^ -L.. -lysxmiddle -L$(PREFIX)/libs $(LINKOPT)
 %.o: %.c
