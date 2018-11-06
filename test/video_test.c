@@ -21,7 +21,7 @@ QCamVideoInputChannel chn_default =
 	.channelId = 0,				//MAIN_STREAM
 	.res = QCAM_VIDEO_RES_1080P,		// resolution
 	.fps = 30,				// fps
-	.bitrate = 2048,				// h264 bitrate (kbps)
+	.bitrate = 2048,			// h264 bitrate (kbps)
 	.gop = 1,				//interval I frame(s)
 	.vbr = YSX_BITRATE_MODE_CBR,		// VBR=1, CBR=0
 	.cb = NULL
@@ -270,8 +270,8 @@ int main(int argc, char *argv[])
 			printf("\t-c set channelId\n");
 			printf("\t-f set fps:\n");
 			printf("\t-v set bitrate_mode:(0:cbr, 1:vbr)\n");
-			printf("\t-b set bitrate:\n");
-			printf("\t-t  Turn on Mul stream test:\n");
+			printf("\t-b set bitrate:2048,1024,768,512\n");
+			printf("\t-t Turn on Mul stream test:1,2,3\n");
 			printf("\t-i set Invert:\n");
 			printf("\t-s Catch Mjpeg:\n");
 			printf("\t-l Detect Light:\n");
@@ -343,7 +343,7 @@ int main(int argc, char *argv[])
 			ret = QCamVideoInput_AddChannel(stream[i]);
 			if(ret){
 				printf("current channelId = %d\n", i);
-				printf("Mul_AddChannel failed %d\n",ret);
+				printf("Mul_AddChannel failed %d\n", ret);
 				goto out;
 			}
 
@@ -351,17 +351,17 @@ int main(int argc, char *argv[])
 				system("date -s \"2018-11-1 23:59:55\"");
 				ret = QCamVideoInput_SetOSD(i, &osd_info);
 				if(ret){
-					printf("QCamVideoInput_SetOSD failed %d\n",ret);
+					printf("QCamVideoInput_SetOSD failed %d\n", ret);
 					goto out;
 				}				
 			}
 
 		}	
 
-		f_stream = fopen( "out_0.h264","w+");
-		f_stream1 = fopen( "out_1.h264","w+");
-		f_stream2 = fopen( "out_2.h264","w+");
-		f_stream3 = fopen( "out_3.h264","w+");
+		f_stream = fopen("out_0.h264","w+");
+		f_stream1 = fopen("out_1.h264","w+");
+		f_stream2 = fopen("out_2.h264","w+");
+		f_stream3 = fopen("out_3.h264","w+");
 		if (f_stream == NULL || f_stream1 == NULL || 
 			f_stream2 == NULL || f_stream3 == NULL) {
 				printf("open file out.h264 fail\n");
@@ -371,7 +371,7 @@ int main(int argc, char *argv[])
 		ret = QCamVideoInput_Start();
 		if(ret){
 			//printf("current channelId = %d\n", i);
-			printf("Mul_Start failed %d\n",ret);
+			printf("Mul_Start failed %d\n", ret);
 			goto out;
 		}
 
@@ -389,7 +389,7 @@ int main(int argc, char *argv[])
 
 	ret = QCamVideoInput_AddChannel(chn);
 	if(ret){
-		printf("QCamVideoInput_AddChannel failed %d\n",ret);
+		printf("QCamVideoInput_AddChannel failed %d\n", ret);
 		goto out;
 	}
 
@@ -401,7 +401,7 @@ int main(int argc, char *argv[])
 
 	ret = QCamVideoInput_Start();
 	if(ret){
-		printf("QCamVideoInput_Start failed %d\n",ret);
+		printf("QCamVideoInput_Start failed %d\n", ret);
 		goto out;
 	}
 
@@ -409,7 +409,7 @@ int main(int argc, char *argv[])
 		system("date -s \"2018-11-1 23:59:55\"");
 		ret = QCamVideoInput_SetOSD(chn.channelId, &osd_info);
 		if(ret){
-			printf("QCamVideoInput_SetOSD failed %d\n",ret);
+			printf("QCamVideoInput_SetOSD failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -420,7 +420,7 @@ int main(int argc, char *argv[])
 		}
 		ret = QCamVideoInput_SetBitrate(chn.channelId, Change_bitrate, chn.vbr);
 		if(ret){
-			printf("QCamVideoInput_SetBitrate failed %d\n",ret);
+			printf("QCamVideoInput_SetBitrate failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -428,7 +428,7 @@ int main(int argc, char *argv[])
 	if(Catch_YUV){
 		ret = test(0, w, h);
 		if(ret){
-			printf("test_YUV failed %d\n",ret);
+			printf("test_YUV failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -436,7 +436,7 @@ int main(int argc, char *argv[])
 	if(Invert){
 		ret = QCamVideoInput_SetInversion(Invert);
 		if(ret){
-			printf("QCamVideoInput_SetInversion failed %d\n",ret);
+			printf("QCamVideoInput_SetInversion failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -450,7 +450,7 @@ int main(int argc, char *argv[])
 	if(Light){
 		ret = QCamVideoInput_HasLight();
 		if(ret){
-			printf("QCamVideoInput_HasLight failed %d\n",ret);
+			printf("QCamVideoInput_HasLight failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -458,7 +458,7 @@ int main(int argc, char *argv[])
 	if(qp >= 0){
 		ret = QCamVideoInput_SetQualityLvl(chn.channelId, qp);
 		if(ret){
-			printf("QCamVideoInput_SetQualityLvl failed %d\n",ret);
+			printf("QCamVideoInput_SetQualityLvl failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -466,7 +466,7 @@ int main(int argc, char *argv[])
 	if(Snap){
 		ret = test(1, w, h);
 		if(ret){
-			printf("test_mjpeg failed %d\n",ret);
+			printf("test_mjpeg failed %d\n", ret);
 			goto out;
 		}
 	}
@@ -474,15 +474,16 @@ int main(int argc, char *argv[])
 	if(key_frame){
 		ret = QCamVideoInput_SetIFrame(chn.channelId);
 		if(ret){
-			printf("QCamVideoInput_SetIFrame failed %d\n",ret);
+			printf("QCamVideoInput_SetIFrame failed %d\n", ret);
 			goto out;			
 		}
 	}
+
 out:
 
 	sleep(10);
 	ret = QCamVideoInput_Uninit();
-	if (f_stream != NULL) {
+	if (f_stream != NULL){
 		fclose(f_stream);
 		f_stream = NULL;
 	}
