@@ -424,10 +424,12 @@ static void *__audio_capture(void *arg)
 	}
 
 	__stop_chn(audio_svr.pai, RTS_RECV);
+
+	return NULL;
 }
 
-//static void __attribute__((constructor(AUDIO_INIT_NO + 10)))
-static void __init_audio_server(void)
+/* static void __attribute__((constructor(AUDIO_INIT_NO + 10))) */
+void __init_audio_server(void)
 {
 	int ret = 0;
 
@@ -451,8 +453,8 @@ static void __init_audio_server(void)
 	RTS_INFO("RTS INIT MIDDLE AUDIO\n");
 }
 
-static void __attribute__((destructor(AUDIO_INIT_NO + 1)))
-__release_audio_server(void)
+/*static void __attribute__((destructor(AUDIO_INIT_NO + 1))) */
+void __release_audio_server(void)
 {
 	if (audio_svr.capture_run) {
 		audio_svr.capture_exit = 1;
@@ -550,9 +552,10 @@ int QCamAudioInputOpen_ysx(QCamAudioInputAttr_aec *pAttr)
 {
 	int ret = 0;
 	static int first_run = 1;
-
+/*
 	if (!audio_svr.svr_init)
 		__init_audio_server();
+*/
 
 	ret = __audio_input_open_sanity_check(pAttr);
 	if (ret < 0)
@@ -671,10 +674,10 @@ void QCamAudioInputSetGain(int gain)
 int QCamAudioOutputOpen(QCamAudioOutputAttribute *pAttr)
 {
 	int ret = 0;
-
+/*
 	if (!audio_svr.svr_init)
 		__init_audio_server();
-
+*/
 
 	audio_svr.ao_profile.audio.samplerate = pAttr->sampleRate;
 	audio_svr.ao_profile.audio.bitfmt = pAttr->sampleBit;

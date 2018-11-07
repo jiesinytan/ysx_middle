@@ -22,19 +22,23 @@
 #include "rts_middle_media.h"
 
 
-static void __attribute__((constructor(AV_INIT_NO)))
-__init_middleware_context(void)
+/* static void __attribute__((constructor(AV_INIT_NO))) */
+void __init_middleware_context(void)
 {
 	rts_set_log_ident("MIDDLEWARE");
 	rts_set_log_mask(RTS_LOG_MASK_CONS);
 
 	rts_av_init();
+	__init_sys_daemon();
+	__init_audio_server();
 	RTS_INFO("RTS AV INIT\n");
 }
 
-static void __attribute__((destructor(AV_INIT_NO)))
-__release_middleware_context(void)
+/* static void __attribute__((destructor(AV_INIT_NO))) */
+void __release_middleware_context(void)
 {
+	__release_sys_daemon();
+	__release_audio_server();
 	rts_av_release();
 	RTS_INFO("RTS AV RELEASE\n");
 }
@@ -765,6 +769,7 @@ static void __deinit_video_stream_info(void)
 	__set_video_stream_info(0);
 }
 
+#ifdef CONFIG_REAL_TIME_STAMP
 static int __switch_time_stamp(void)
 {
 	int fd = -1;
@@ -783,7 +788,7 @@ static int __switch_time_stamp(void)
 
 	return ret;
 }
-
+#endif
 
 int QCamVideoInput_Init()
 {
@@ -817,7 +822,7 @@ int QCamVideoInput_Init()
 static int __add_chn_sanity_check(QCamVideoInputChannel *pchn)
 {
 	/* there's one stream only equipped with isp channel */
-	if ((pchn->channelId < 0) || (pchn->channelId >= (STREAM_COUNT-1)))
+	if ((pchn->channelId < 0) || (pchn->channelId >= (STREAM_COUNT - 1)))
 		goto exit;
 	if ((pchn->res <= 0) || (pchn->res > 4))
 		goto exit;
@@ -854,7 +859,7 @@ static void __transform_resolution(QCAM_VIDEO_RESOLUTION res,
 		break;
 	case QCAM_VIDEO_RES_360P:
 		*width = 640;
-		*height = 360;
+		*height = 320;
 		break;
 	case QCAM_VIDEO_RES_1080P:
 		/*TODO*/
@@ -1121,6 +1126,8 @@ int __destroy_chn(Mchannel *pchn)
 {
 	int ret = 0;
 
+	if (pchn == NULL)
+		return -1;
 	if (pchn->stat != RTS_CHN_STAT_OK)
 		goto exit;
 
@@ -1142,6 +1149,8 @@ int __bind_chn(Mchannel *pchn1, Mchannel *pchn2)
 {
 	int ret = 0;
 
+	if ((pchn1 == NULL) || (pchn2 == NULL))
+		return -1;
 	if ((pchn1->stat != RTS_CHN_STAT_OK)
 			|| pchn2->stat != RTS_CHN_STAT_OK)
 		goto exit;
@@ -1164,8 +1173,10 @@ int __unbind_chn(Mchannel *pchn1, Mchannel *pchn2)
 {
 	int ret = 0;
 
+	if ((pchn1 == NULL) || (pchn2 == NULL))
+		return -1;
 	if ((pchn1->stat != RTS_CHN_STAT_OK)
-			|| pchn2->stat != RTS_CHN_STAT_OK)
+			|| (pchn2->stat != RTS_CHN_STAT_OK))
 		goto exit;
 
 	ret = rts_av_unbind(pchn1->id, pchn2->id);
@@ -1186,6 +1197,8 @@ int __enable_chn(Mchannel *pchn)
 {
 	int ret = 0;
 
+	if (pchn == NULL)
+		return -1;
 	if (pchn->stat != RTS_CHN_STAT_OK)
 		goto exit;
 
@@ -1207,6 +1220,8 @@ int __disable_chn(Mchannel *pchn)
 {
 	int ret = 0;
 
+	if (pchn == NULL)
+		return -1;
 	if (pchn->stat != RTS_CHN_STAT_OK)
 		goto exit;
 
@@ -1391,6 +1406,8 @@ int __start_chn(Mchannel *pchn, int dir)
 {
 	int ret = 0;
 
+	if (pchn == NULL)
+		return -1;
 	if (pchn->stat == RTS_CHN_STAT_RUN)
 		return 0;
 	if (pchn->stat != RTS_CHN_STAT_OK)
@@ -1422,6 +1439,8 @@ int __stop_chn(Mchannel *pchn, int dir)
 {
 	int ret = 0;
 
+	if (pchn == NULL)
+		return -1;
 	if (pchn->stat == RTS_CHN_STAT_OK)
 		return 0;
 	if (pchn->stat != RTS_CHN_STAT_RUN)

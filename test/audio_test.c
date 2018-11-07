@@ -5,50 +5,52 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <unistd.h>
 #include <signal.h>
 
 #include "../rts_middle_media.h"
 
-#define audio_default_set	-1
 #define audio_vol_min		0
-#define inputRate_default	8*1000		//unsure the value
-#define mic_volume_default	50		//unsure the value
-#define inputBit_default	8		//unsure the value
-#define gain_default		10		//unsure the value
+#define inputRate_default	(8*1000)
+#define mic_volume_default	90
+#define inputBit_default	16
+#define gain_default		20
 
-#define outputRate_default	8*1000		//unsure the value
-#define spk_volume_default	50		//unsure the value
-#define outputBit_default	8		//unsure the value
+#define outputRate_default	(8*1000)
+#define spk_volume_default	90
+#define outputBit_default	16
 
-#define buffer_total		10*1000
+#define buffer_total		(10*1000)
 
-#define PCM_FRAME_BUF	8*1000		//how to sure the size 
-#define Wr_Audio_File		"a.pcm"	//input audio file
-#define Rd_Audio_File		"b.pcm" 	//output audio file
+#define PCM_FRAME_BUF	320
+#define Wr_Audio_File		"a.pcm"
+#define Rd_Audio_File		"b.pcm"
 
 int g_exit;
 
 void sig_handle(int sig)
 {
 	g_exit = 1;
+	printf("Received Ctrl+c\n");
 }
 
-FILE *f_wr_audio = NULL;
-FILE *f_rd_audio = NULL;
+FILE *f_wr_audio;
+FILE *f_rd_audio;
 
 void audio_cb(const struct timeval *tv, const void *pcm_buf,
 	const int pcm_len, const void *spk_buf)
 {
 	static uint64_t count;
 	int ret = 0;
-	if(!f_wr_audio) {
+	if (!f_wr_audio)
 		printf("file not exist, no space to save audio stream\n");
-	}
-	ret = fread(pcm_buf, sizeof(uint8_t), pcm_len, f_wr_audio);
+
+	ret = fwrite(pcm_buf, sizeof(uint8_t), pcm_len, f_wr_audio);
 	if (ret != pcm_len)
 		printf("lost data when save data, write[%d] get[%d]\n",
 			pcm_len, ret);
-	printf("get pcm[%llu] frames\n", ++count);
+	if (!(++count % 100))
+		printf("get pcm[%llu] frames\n", count);
 }
 
 int main(int argc, char *argv[])
@@ -56,15 +58,15 @@ int main(int argc, char *argv[])
 	int ret = 0;
 	int ch;
 	uint8_t audio_in = 0, audio_out = 0;
-	uint8_t enaec = 0; 
-	int count = 100;
+	uint8_t enaec = 0;
 	char *pcmdata;
 	uint32_t  Length = 0, pcm_count = 0;
 	int rate = inputRate_default;
-	int volume_set = mic_volume_default; 
+	int volume_set = mic_volume_default;
 	int sample_bit = inputBit_default;
 	int sample_gain = gain_default;
-	
+	int o_test = 0;
+
 	QCamAudioInputAttr_aec AudioInput;
 	QCamAudioOutputAttribute AudioOutput;
 	QCamAudioOutputBufferStatus BufferStat;
@@ -73,13 +75,13 @@ int main(int argc, char *argv[])
 	memset(&AudioOutput, 0, sizeof(QCamAudioOutputAttribute));
 	memset(&BufferStat, 0, sizeof(QCamAudioOutputBufferStatus));
 
-	while ((ch = getopt(argc, argv, "r:a:v:b:g:i:o:h")) != -1) {
+	while ((ch = getopt(argc, argv, "r:av:b:g:ioth")) != -1) {
 		switch (ch) {
 		case 'r':
 			rate = strtol(optarg, NULL, 10);
 			break;
 		case 'a':
-			enaec = strtol(optarg, NULL, 10);
+			enaec = 1;
 			break;
 		case 'v':
 			volume_set = strtol(optarg, NULL, 10);
@@ -95,18 +97,20 @@ int main(int argc, char *argv[])
 			break;
 		case 'o':
 			audio_out = 1;
-			break;			
+			break;
+		case 't':
+			o_test = 1;
+			break;
 		case 'h':
 			printf("Usage:\n");
 			printf("\t-r set sample rate:\n");
-			printf("\t-v use the default para if volume -1\n");
+			printf("\t-v set volume\n");
 			printf("\t-b set sample bit:8 or 16\n");
-			printf("\t-g set gain:\n");			
+			printf("\t-g set gain:\n");
 			printf("\t-a turn on aec\n");
 			printf("\t-i turn on audio_in test\n");
-			printf("\t-p turn on playback\n");
-			printf("\t-e turn on G711Encode\n");
-			printf("\t-t turn on testing\n");
+			printf("\t-o turn on audio_out test\n");
+			printf("\t-t turn on testing, use the default paran\n");
 			/* fall through */
 		default:
 			return -1;
@@ -117,147 +121,144 @@ int main(int argc, char *argv[])
 	signal(SIGTERM, sig_handle);
 	signal(SIGINT, sig_handle);
 
-	if(volume_set == audio_default_set){
+	if (!o_test) {
 		AudioInput.sampleRate = inputRate_default;
-		AudioInput.sampleBit = mic_volume_default;
-		AudioInput.volume = inputBit_default;
-		AudioInput.cb = audio_cb;		
+		AudioInput.sampleBit = inputBit_default;
+		AudioInput.volume = mic_volume_default;
+		AudioInput.cb = audio_cb;
 
 		AudioOutput.sampleRate = outputRate_default;
 		AudioOutput.sampleBit = outputBit_default;
-		AudioOutput.volume = spk_volume_default;	
-	}
-	else{
-		if(volume_set < audio_default_set)
-			volume_set = audio_vol_min;
-		else if(volume_set > MIC_VOLUME_RANGE)
-			volume_set = MIC_VOLUME_RANGE;
-
-		AudioInput.sampleRate = rate;	
-		AudioInput.sampleBit = sample_bit;	
-		AudioInput.volume = volume_set;	
+		AudioOutput.volume = spk_volume_default;
+	} else{
+		AudioInput.sampleRate = rate;
+		AudioInput.sampleBit = sample_bit;
+		AudioInput.volume = volume_set;
 		AudioInput.cb = audio_cb;
-		AudioOutput.sampleRate = rate;		
+		AudioOutput.sampleRate = rate;
 		AudioOutput.sampleBit = sample_bit;
 		AudioOutput.volume = volume_set;
 	}
 
-	f_wr_audio = fopen(Wr_Audio_File, "w+");
-	if (f_wr_audio == NULL) {
-		printf("open wr_audio file  fail\n");
-		goto out;
-	}
+	__init_middleware_context();
 
-	f_rd_audio = fopen(Rd_Audio_File, "rb");
-	if (f_wr_audio == NULL) {
-		printf("open rd_audio file  fail\n");
-		goto out;
-	}
-
-	if (audio_in) {
+	if (audio_in ||  enaec) {
 		printf("Testing QcamAudio input dev mono...\n");
 
+		f_wr_audio = fopen(Wr_Audio_File, "w+");
+		if (f_wr_audio == NULL) {
+			printf("open wr_audio file  fail\n");
+			goto out;
+		}
+
 		ret = QCamAudioInputOpen_ysx(&AudioInput);
-		if(ret){
+		if (ret) {
 			printf("QCamAudioInputOpen_ysx failed\n");
 			goto out;
 		}
 
 		ret = QCamAudioInputSetVolume(AudioInput.volume);
-		if(ret){
+		if (ret) {
 			printf("QCamAudioInputSetVolume failed\n");
-			goto out;	
-		}	
+			goto out;
+		}
 
 		QCamAudioInputSetGain(sample_gain);
-		//ensure the enaec = 0
-		ret = QCamAudioAecEnable(enaec);
-		if(ret){
-			printf("QCamAudioAecEnable failed\n");
-			goto out;
-		}	
 
-		while(!g_exit && count--){
-			ret = QCamAudioInputStart();
-			printf("show the callback count= %d\n",count);	
-			if(ret){
-				printf("QCamAudioInputStart failed\n");
-				goto out;	
-			}
-		}
-
-		ret = QCamAudioInputStop();
-		if(ret){
-			printf("QCamAudioInputStop failed\n");
-			goto out;
-		}
-
-		ret = QCamAudioInputClose_ysx();
-		if(ret){
-			printf("QCamAudioInputClose_ysx failed\n");
-			goto out;
-		}
+		ret = QCamAudioInputStart();
+		if (ret)
+			printf("QCamAudioInputStart failed\n");
 	}
 
-	if(audio_out){
+	if (enaec) {
+		ret = QCamAudioAecEnable(enaec);
+		if (ret)
+			printf("QCamAudioAecEnable failed\n");
+	}
+
+
+	if (audio_out || enaec) {
 		printf("Testing QcamAudio output dev ...\n");
+
+		f_rd_audio = fopen(Rd_Audio_File, "rb");
+		if (f_rd_audio == NULL) {
+			printf("open rd_audio file  fail\n");
+			goto out;
+		}
+
 /*
 		fseek(f_rd_audio, 0, SEEK_END);
 		Length = ftell(f_rd_audio);
 		pcm_count = Length / PCM_FRAME_BUF + 1;
 		printf("pcm_count = %d\n", pcm_count);
-*/		
+*/
 		ret = QCamAudioOutputOpen(&AudioOutput);
-		if(ret){
+		if (ret) {
 			printf("QCamAudioOutputOpen failed\n");
 			goto out;
 		}
 
 		ret = QCamAudioOutputSetVolume(AudioOutput.volume);
-		if(ret){
+		if (ret) {
 			printf("QCamAudioOutputSetVolume failed\n");
-			goto out;			
+			goto out;
 		}
 
 		pcmdata = (char *)malloc(PCM_FRAME_BUF);
-		while(!g_exit){
-			if(!feof(f_rd_audio)) {
-				Length = fread(pcmdata, 1, PCM_FRAME_BUF, f_rd_audio);
-				if(Length != PCM_FRAME_BUF){
-					printf("read the pcm frame = %d\n", pcm_count);
-					g_exit = 1;
-				}
+		while (!g_exit && !feof(f_rd_audio)) {
+			Length = fread(pcmdata, 1, PCM_FRAME_BUF, f_rd_audio);
+			if (Length != PCM_FRAME_BUF) {
+				printf("read the pcm frame = %d\n", pcm_count);
+				g_exit = 0;
+			}
 
-				ret = QCamAudioOutputPlay_ysx(pcmdata, PCM_FRAME_BUF);
-				if(ret){
-					printf("QCamAudioOutputPlay_ysx failed\n");
-					goto out;
-				}
+			ret = QCamAudioOutputPlay_ysx(pcmdata, PCM_FRAME_BUF);
+			if (ret) {
+				printf("QCamAudioOutputPlay_ysx failed\n");
+				goto out;
+			}
 
+			if (!(pcm_count % 100)) {
 				ret = QCamAudioOutputQueryBuffer(&BufferStat);
-				printf("bufferTotal = %d, BufferBusy = %d",
-				BufferStat.total, BufferStat.busy);
-				if(ret){
+				printf("bufferTotal = %d, BufferBusy = %d\n",
+						BufferStat.total, BufferStat.busy);
+				if (ret)
 					printf("QCamAudioOutputQueryBuffer failed\n");
-				}
-				pcm_count++;
-				usleep(1000);
-			} 
+			}
+			pcm_count++;
+			usleep(5000);
 		}
-		fclose(f_rd_audio);
 		free(pcmdata);
 		QCamAudioOutputClose();
 	}
 
+	if (audio_in  ||  enaec) {
+		if (!(audio_out || enaec))
+			sleep(20);
+
+		printf("Stop audio input\n");
+		ret = QCamAudioInputStop();
+		if (ret)
+			printf("QCamAudioInputStop failed\n");
+
+		ret = QCamAudioInputClose_ysx();
+		if (ret)
+			printf("QCamAudioInputClose_ysx failed\n");
+	}
+
 out:
-	QCamAudioInputClose_ysx();
-	QCamAudioOutputClose();
-	if ((f_rd_audio != NULL) ||(f_wr_audio != NULL)) {
+	if (f_rd_audio != NULL) {
 		fclose(f_rd_audio);
-		fclose(f_wr_audio);
 		f_rd_audio = NULL;
+	}
+
+	if (f_wr_audio != NULL) {
+		fclose(f_wr_audio);
 		f_wr_audio = NULL;
 	}
+
+	__release_middleware_context();
+
 	printf("exit code %d\n", ret);
 	return ret;
 }

@@ -14,7 +14,6 @@
 #define CHN_ERR(x) ((&(x))->err)
 
 /*********** video ***********/
-
 #define MAIN_STREAM 0
 #define STREAM_COUNT 4 /* stream 0,1,2 h264 stream; stream 3 isp stream*/
 #define YUV_CAPTURE_CHN 3
@@ -31,8 +30,8 @@
 #define MJPEG_COMPRESS_RATE 15
 
 
-#define GPIO_IR_CUT 16
-#define GPIO_IR_LED 18
+#define GPIO_IR_CUT 10
+#define GPIO_IR_LED 16
 #define GPIO_IR_CUT_DAY 0
 #define GPIO_IR_CUT_NIGHT 1
 #define GPIO_IR_LED_DAY 0
@@ -230,10 +229,10 @@ struct rts_m_ir {
 	int auto_ir_stat;
 	pthread_mutex_t mutex;
 };
+/*********** video ***********/
 
 
 /*********** audio ***********/
-
 #define DFT_AD_IN_CHANNELS 1
 #define DFT_AD_IN_BITFMT 16
 #define DFT_AD_IN_RATE_8K 8000
@@ -266,8 +265,31 @@ struct audio_server {
 	QCamAudioInputCallback_aec aec_cb;
 	int svr_init;
 };
-
 /*********** audio ***********/
+
+/*********** sys *************/
+/* assign key gpio number at kernel config */
+#define KEY_NUM 3
+#define LED_NUM 2
+
+#define BLINK_DUTY 200000 /* time: xx us */
+enum led_color {
+	LED_YELLOW = 0,
+	LED_BLUE,
+};
+
+/* TODO system gpio? io number? */
+enum led_gpio {
+	GPIO_LED_YELLOW = 9,
+	GPIO_LED_BLUE = 11,
+};
+
+struct led {
+	struct rts_gpio *gpio;
+	int blink;
+};
+/*********** sys *************/
+
 
 void __init_chn_info(Mchannel *pchn, int type);
 int __bind_chn(Mchannel *pchn1, Mchannel *pchn2);
@@ -278,4 +300,12 @@ int __disable_chn(Mchannel *pchn);
 int __start_chn(Mchannel *pchn, int dir);
 int __stop_chn(Mchannel *pchn, int dir);
 
+void __init_audio_server(void);
+void __release_audio_server(void);
+
+void __init_sys_daemon(void);
+void __release_sys_daemon(void);
+
+void __init_middleware_context(void);
+void __release_middleware_context(void);
 #endif

@@ -1,55 +1,58 @@
-DIR_ROOT ?= /home/jiesiny/SDK/sdk_v2.3_release
+DIR_ROOT ?= /home/steve_liu/ipcam_linux/sdk_v2.3.1_release
 DIR_TMPFS := $(DIR_ROOT)/tmpfs
 CC := $(DIR_ROOT)/toolchain/rsdk/bin/rsdk-linux-gcc
 AR := $(DIR_ROOT)/toolchain/rsdk/bin/rsdk-linux-ar
 DIR_SRC := $(shell pwd)
 PREFIX ?= $(DIR_SRC)
 
+EXTRA_CFLAGS :=
 CFLAGS += -Wall -Os -std=gnu99 -I$(DIR_TMPFS)/include -I$(DIR_SRC)/include \
+	-I$(DIR_SRC) \
 #	  -DCONFIG_REAL_TIME_STAMP
+CFLAGS += $(EXTRA_CFLAGS)
 
 STATICLIBS = rtsisp h1encoder rtsjpeg rtsosd2 \
 	rtsosd rtsv4l2 rtscamkit \
 	rtsacodec rtsaec rtsmp3 opencore-amrnb aacenc sbc opus \
-	rtsio rtsgeom rtsamixer asound rtsresample rtstream  \
-	
+	rtsio rtsgeom rtsamixer asound rtsresample rtstream rtsmd rtsbmp \
+	motion_tracking
 
-LINKLIBS = -lrtsisp -lh1encoder -lrtsjpeg -lrtsosd2 -lrtsosd -lrtsv4l2 \
+LINKLIBS = -lrtstream -lrtsresample -lrtsacodec -lrtsamixer -lrtsisp \
+	-lh1encoder -lrtsjpeg -lrtsosd2 -lrtsosd -lrtsv4l2 \
 	-lrtscamkit -lrtsaec -lrtsmp3 -lopencore-amrnb -laacenc -lsbc -lopus \
-	-lrtsio -lrtsgeom -lasound -lpthread -lm -ldl  \
-	
+	-lrtsio -lrtsgeom -lasound -lrtsbmp -lrtsmd -lmotion_tracking
 
-LINKOPT = -Wl,--whole-archive -lrtstream -Wl,--no-whole-archive -lrtsresample \
-	-lrtsacodec -lrtsamixer $(LINKLIBS)
+LINKOPT = -Wl,-Bstatic -Wl,--whole-archive -lrtstream -Wl,--no-whole-archive \
+	  -lrtsacodec -lrtsamixer $(LINKLIBS) \
+	  -Wl,-Bdynamic -ldl -lc -lpthread -lm
 
-OBJS = ysx_video_middle.o ysx_audio_middle.o
+OBJS = ysx_video_middle.o ysx_audio_middle.o ysx_sys_middle.o
 
-export CC CFLAGS LIBS LIB_PATH PREFIX LINKOPT
+export CC CFLAGS LIB_PATH PREFIX LINKOPT DIR_SRC DIR_TMPFS
 
-.PHONY: all test install clean nfs
-all: libysxmiddle.a install
+.PHONY: static share test clean
+static:libysxmiddle.a
+share: libysxmiddle.so
 
 libysxmiddle.a: $(OBJS)
 	@echo -e "\033[32mlink $@ \033[0m"
 	$(AR) -crs $@ $^
 
-test: $(TARGETS)
-	$(MAKE) -C test
+libysxmiddle.so: $(OBJS)
+	$(CC) --shared -o $@ $^ -L$(DIR_SRC)/libs $(LINKOPT)
 
 install:
 	mkdir -p $(PREFIX)/libs
 	cd $(DIR_TMPFS)/lib; \
 		for i in "$(patsubst %, lib%.a, $(STATICLIBS))"; do cp $$i $(PREFIX)/libs; done
 
-nfs:
-	-mkdir -p ~/share/nfs/ysx_middle_test
-	-cp *.a ~/share/nfs/ysx_middle_test
-	-cp test/*_test ~/share/nfs/ysx_middle_test
+test:
+	$(MAKE) -C test
 
 clean:
 	-rm *.o
 	-rm *.a
-	-rm ./libs -rf
+	-rm *.so
 	$(MAKE) -C test clean
 
 %.o: %.c

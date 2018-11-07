@@ -1,18 +1,18 @@
-#include <qcam_sys.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <qcam_sys.h>
 
 #include "../rts_middle_media.h"
 
-#define LED_HZ	1	//not sure the default frequency
-#define LED_HZ_MAX	1000 	//1KHz
-#define FPath 			"/lib/firmware/isp.fw" 
+#define LED_HZ	1
+#define LED_HZ_MAX	1000
+#define FPath 		"/lib/firmware/isp.fw"
 
-FILE *f_firmware = NULL;
+FILE *f_firmware;
 
 int g_exit;
 
@@ -23,17 +23,17 @@ void sig_handle(int sig)
 
 void key_cb(const int status)
 {
-	switch(status){
-		case KEY_INVALID:
-			printf("The Key is unvalid.\n"); 
-		break;
-		case KEY_RELEASED:
-			printf("The Key has been released.\n"); 
-		break;
-		case KEY_PRESSED:
-			printf("The Key has been pressed.\n"); 
-		break;
-	}			
+	switch (status) {
+	case KEY_INVALID:
+		printf("[listener] The Key is unvalid.\n");
+	break;
+	case KEY_RELEASED:
+		printf("[listener] The Key has been released.\n");
+	break;
+	case KEY_PRESSED:
+		printf("[listener] The Key has been pressed.\n");
+	break;
+	}
 }
 
 int main(int argc, char *argv[])
@@ -42,31 +42,30 @@ int main(int argc, char *argv[])
 	int ch;
 	int status;
 	int Length;
-	char led_change = 0;
-	char frez_change = 0;
-	int mode = LED_MODE_OFF;
-	int led_frez = LED_HZ;
-	const char *firmware_data;
-	while ((ch = getopt(argc, argv, "m:f:l:n:h")) != -1) {
+	char *firmware = NULL;
+	int o_key = 0;
+	int o_burn = 0;
+	int o_led = 0;
+
+	__init_middleware_context();
+
+	while ((ch = getopt(argc, argv, "b:klh")) != -1) {
 		switch (ch) {
-		case 'm':
-			mode = strtol(optarg, NULL, 10);
+		case 'b':
+			o_burn = 1;
+			firmware = optarg;
 			break;
-		case 'f':
-			led_frez = strtol(optarg, NULL, 10);
-			break;	
+		case 'k':
+			o_key = 1;
+			break;
 		case 'l':
-			led_change = 1;
+			o_led = 1;
 			break;
-		case 'n':
-			frez_change = 1;
-			break;					
 		case 'h':
 			printf("Usage:\n");
-			printf("\t-m Set Led Mode:\n");
-			printf("\t-f Set Led frequency:\n");
-			printf("\t-l Change The Led Mode Test\n");
-			printf("\t-n Change The frequency Test\n");			
+			printf("\t-b burn flash\n");
+			printf("\t-k start button monitor\n");
+			printf("\t-l led test\n");
 			/* fall through */
 		default:
 			return -1;
@@ -77,73 +76,51 @@ int main(int argc, char *argv[])
 	signal(SIGTERM, sig_handle);
 	signal(SIGINT, sig_handle);
 
-	f_firmware = fopen(FPath, "rb");
-	if (f_firmware == NULL) {
-		printf("open rd_audio file  fail.\n");
-		goto out;
-	}
-	fseek(f_firmware, 0, SEEK_END);
-	Length = ftell(f_firmware);
-	firmware_data = (const char *)malloc(Length);
+	if (o_burn) {
+		f_firmware = fopen(FPath, "rb");
+		if (f_firmware == NULL) {
+			printf("open rd_audio file  fail.\n");
+			goto out;
+		}
+		fseek(f_firmware, 0, SEEK_END);
+		Length = ftell(f_firmware);
+		firmware = (const char *)malloc(Length);
 
-	ret = QCamFlashBurn(firmware_data);
-	if(ret){
-		printf("QCamFlashBurn failed.\n");
-		goto out;
+		ret = QCamFlashBurn(firmware);
+		if (ret) {
+			printf("QCamFlashBurn failed.\n");
+			goto out;
+		}
 	}
 
-	if(led_change){
+	if (o_led) {
 		printf("Test LED MODE change.\n");
-		for(int i = LED_MODE_OFF; i <= LED_MODE_MAX; i++){
-			ret = QCamLedSet(i, led_frez);
-			if(ret){
-				printf("QCamLedSet MODE = [%d] failed\n",i);
-				goto out;
-			}
-			sleep(10);
-		}
+		QCamLedSet(LED_MODE_BLUE, 1);
+		QCamLedSet(LED_MODE_YELLOW, 0);
+		sleep(5);
+		QCamLedSet(LED_MODE_BLUE, 0);
+		QCamLedSet(LED_MODE_YELLOW, 1);
+		sleep(5);
 	}
 
-	if(frez_change){
-		printf("Test LED frequency change.\n");
-		for(int i = 1; i <= LED_MODE_MAX; i = i+10){
-			ret = QCamLedSet(mode, i);
-			if(ret){
-				printf("QCamLedSet frequency = [%d] failed\n",i);
-				goto out;
-			}
-			sleep(10);
-		}
-
-		for(int i = LED_HZ; i >= 0; i = i-0.1){
-			ret = QCamLedSet(mode, i);
-			if(ret){
-				printf("QCamLedSet frequency = [%d] failed\n",i);
-				goto out;
-			}
-			sleep(10);
-		}		
-	}	
-
-	ret = QCamLedSet(mode, led_frez);
-	if(ret){
-		printf("QCamLedSet failed.\n");
-		goto out;		
-	}
-
-	while(!g_exit){
+	if (o_key) {
 		QCamRegKeyListener(key_cb);
-
-		status = QCamGetKeyStatus();
-		printf("-1 unvalid, 0 released, 1 pressed %d\n", status);
-		status = QCamGetKey2Status();
-		printf("-1 unvalid, 0 released, 1 pressed %d\n", status);
-
-		usleep(10);
+		while (!g_exit) {
+			status = QCamGetKeyStatus();
+			printf("key0[%d]\n", status);
+			status = QCamGetKey2Status();
+			printf("key1[%d]\n", status);
+			sleep(1);
+		}
 	}
 
 out:
-	free(firmware_data);
+	if (firmware != NULL) {
+		free(firmware);
+		firmware = NULL;
+	}
+
+	__release_middleware_context();
 	printf("exit code %d\n", ret);
 	return ret;
 
