@@ -1,6 +1,7 @@
 #ifndef __RTS_MIDDLE_MEDIA_H
 #define __RTS_MIDDLE_MEDIA_H
 
+#include <stdbool.h>
 #include <rtsavapi.h>
 #include <qcam_video_input.h>
 #include <qcam_audio_input.h>
@@ -149,13 +150,18 @@ struct rts_m_osd2 {
 	struct rts_m_osd2_pict pict;;
 };
 
+struct osd_m_tid {
+	pthread_t tid;
+	bool stat;
+};
+
 struct rts_m_osd2_common {
 	/* each osd channel share same time template */
 	uint8_t *tm_img_patt;
 	uint8_t *tm_img_2222;
 	/* flag: osd flush time run/stop */
 	int run; /* 0:initial stat stop*/
-	pthread_t tid;
+	struct osd_m_tid osd_tid;
 };
 
 typedef struct Mchannel {
@@ -219,12 +225,17 @@ enum rts_m_auto_ir_stat {
 	AUTO_IR_RUN,
 };
 
+struct ir_m_tid {
+	pthread_t tid;
+	bool stat;
+};
+
 struct rts_m_ir {
 	enum rts_m_ir_stat ir_stat;
 	QCAM_IR_MODE ir_mode;
 	struct rts_gpio *gpio_ir_cut;
 	struct rts_gpio *gpio_ir_led;
-	pthread_t tid;
+	struct ir_m_tid ir_tid;
 	int auto_ir_exit;
 	int auto_ir_stat;
 	pthread_mutex_t mutex;
@@ -287,6 +298,16 @@ enum led_gpio {
 struct led {
 	struct rts_gpio *gpio;
 	int blink;
+};
+
+struct button_tid {
+	pthread_t tid;
+	bool stat;
+};
+
+struct led_tid {
+	pthread_t tid;
+	bool stat;
 };
 /*********** sys *************/
 

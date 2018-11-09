@@ -15,8 +15,9 @@
 
 #include "rts_middle_media.h"
 
-static pthread_t g_button_tid;
-static pthread_t g_led_tid;
+
+static struct button_tid g_button_tid;
+static struct led_tid g_led_tid;
 static int g_key_monitor_exit;
 static int g_led_exit;
 /* key0:BUTTON_0; key1:BUTTON_1; key2:BUTTON_2;*/
@@ -111,13 +112,18 @@ static void __init_key_monitor(void)
 	int ret = 0;
 	int i;
 
+	g_button_tid.stat = false;
+
 	for (i = 0; i < KEY_NUM; i++)
 		g_key_stat[i] = KEY_INVALID;
 	__key_cb = NULL;
 
-	ret = pthread_create(&g_button_tid, NULL, __get_key_value, NULL);
-	if (ret < 0)
+	ret = pthread_create(&g_button_tid.tid, NULL, __get_key_value, NULL);
+	if (ret < 0) {
 		RTS_ERR("Create button monitor thread fail\n ");
+		return;
+	}
+	g_button_tid.stat = true;
 
 	RTS_INFO("Start key monitor\n");
 }
@@ -127,7 +133,10 @@ static void __release_key_monitor(void)
 {
 	g_key_monitor_exit = 1;
 
-	pthread_join(g_button_tid, NULL);
+	if (g_button_tid.stat == true) {
+		pthread_join(g_button_tid.tid, NULL);
+		g_button_tid.stat = false;
+	}
 	RTS_INFO("Stop key monitor\n");
 }
 
@@ -159,6 +168,8 @@ static void __init_led_controller(void)
 	int ret = 0;
 	int i;
 
+	g_led_tid.stat = false;
+
 	for (i = 0; i < LED_NUM; i++) {
 		led[i].gpio = NULL;
 		led[i].blink = 0;
@@ -179,9 +190,12 @@ static void __init_led_controller(void)
 	for (i = 0; i < LED_NUM; i++)
 		rts_io_gpio_set_value(led[i].gpio, 1);
 
-	ret = pthread_create(&g_led_tid, NULL, __led_controller, NULL);
-	if (ret < 0)
+	ret = pthread_create(&g_led_tid.tid, NULL, __led_controller, NULL);
+	if (ret < 0) {
 		RTS_ERR("Create led controller thread fail\n ");
+		goto exit;
+	}
+	g_led_tid.stat = true;
 
 	RTS_INFO("Start led controller\n");
 
@@ -194,7 +208,10 @@ static void __release_led_controller(void)
 {
 	g_led_exit = 1;
 
-	pthread_join(g_led_tid, NULL);
+	if (g_led_tid.stat == true) {
+		pthread_join(g_led_tid.tid, NULL);
+		g_led_tid.stat = false;
+	}
 
 	if (led[LED_YELLOW].gpio != NULL)
 		rts_io_gpio_free(led[LED_YELLOW].gpio);

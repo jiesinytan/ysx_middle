@@ -333,9 +333,11 @@ static int __start_osd_supervisor(void)
 {
 	int ret = 0;
 
-	ret = pthread_create(&osd2_com.tid, NULL, __osd_supervisor, NULL);
+	osd2_com.osd_tid.stat = false;
+	ret = pthread_create(&osd2_com.osd_tid.tid, NULL, __osd_supervisor, NULL);
 	if (ret < 0)
 		goto exit;
+	osd2_com.osd_tid.stat = true;
 
 	return 0;
 
@@ -348,7 +350,10 @@ static void __stop_osd_supervisor(void)
 {
 	osd2_com.run = 0;
 
-	pthread_join(osd2_com.tid, NULL);
+	if (osd2_com.osd_tid.stat == true) {
+		pthread_join(osd2_com.osd_tid.tid, NULL);
+		osd2_com.osd_tid.stat = false;
+	}
 	RTS_SAFE_DELETE(osd2_com.tm_img_patt);
 	RTS_SAFE_DELETE(osd2_com.tm_img_2222);
 	__deinit_osd2_stuf();
@@ -696,6 +701,7 @@ static int __start_auto_ir(void)
 	memset(&ir, 0, sizeof(ir));
 	ir.ir_stat = UNKNOWN; /* TODO what is the start stat */
 	ir.ir_mode = QCAM_IR_MODE_AUTO;
+	ir.ir_tid.stat = false;
 	ir.gpio_ir_cut = NULL;
 	ir.gpio_ir_led = NULL;
 	ir.auto_ir_stat = AUTO_IR_STOP;
@@ -707,9 +713,10 @@ static int __start_auto_ir(void)
 
 	pthread_mutex_init(&ir.mutex, NULL);
 
-	ret = pthread_create(&ir.tid, NULL, __auto_ir_thread, NULL);
+	ret = pthread_create(&ir.ir_tid.tid, NULL, __auto_ir_thread, NULL);
 	if (ret < 0)
 		goto exit;
+	ir.ir_tid.stat = true;
 
 	return 0;
 
@@ -722,7 +729,10 @@ static void __release_auto_ir(void)
 {
 	QCamSetIRMode(QCAM_IR_MODE_AUTO);
 	__stop_auto_ir();
-	pthread_join(ir.tid, NULL);
+	if (ir.ir_tid.stat == true) {
+		pthread_join(ir.ir_tid.tid, NULL);
+		ir.ir_tid.stat = false;
+	}
 	pthread_mutex_destroy(&ir.mutex);
 
 	free_ir_gpio();
@@ -1502,7 +1512,7 @@ static void __stream_thread(void *arg)
 			time.tv_usec =
 				(__suseconds_t)(buffer->timestamp % 1000000);
 
-			if (buffer->flags == RTSTREAM_PKT_FLAG_KEY)
+			if (buffer->flags & RTSTREAM_PKT_FLAG_KEY)
 				keyframe = 1;
 			else
 				keyframe = 0;
@@ -1676,7 +1686,7 @@ int QCamVideoInput_SetOSD(int channel, QCamVideoInputOSD *pOsdInfo)
 	if (ret < 0)
 		goto exit;
 
-	if (!osd2_com.run || pOsdInfo->time_enable) {
+	if (!osd2_com.run && pOsdInfo->time_enable) {
 		__init_osd2_stuf();
 		ret = __start_osd_supervisor();
 		if (ret < 0)

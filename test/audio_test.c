@@ -42,6 +42,7 @@ void audio_cb(const struct timeval *tv, const void *pcm_buf,
 {
 	static uint64_t count;
 	int ret = 0;
+
 	if (!f_wr_audio)
 		printf("file not exist, no space to save audio stream\n");
 
@@ -186,12 +187,6 @@ int main(int argc, char *argv[])
 			goto out;
 		}
 
-/*
-		fseek(f_rd_audio, 0, SEEK_END);
-		Length = ftell(f_rd_audio);
-		pcm_count = Length / PCM_FRAME_BUF + 1;
-		printf("pcm_count = %d\n", pcm_count);
-*/
 		ret = QCamAudioOutputOpen(&AudioOutput);
 		if (ret) {
 			printf("QCamAudioOutputOpen failed\n");
@@ -221,9 +216,9 @@ int main(int argc, char *argv[])
 			if (!(pcm_count % 100)) {
 				ret = QCamAudioOutputQueryBuffer(&BufferStat);
 				printf("bufferTotal = %d, BufferBusy = %d\n",
-						BufferStat.total, BufferStat.busy);
+					BufferStat.total, BufferStat.busy);
 				if (ret)
-					printf("QCamAudioOutputQueryBuffer failed\n");
+					printf("QueryBuffer failed\n");
 			}
 			pcm_count++;
 			usleep(5000);

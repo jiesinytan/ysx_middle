@@ -10,7 +10,7 @@
 
 #define LED_HZ	1
 #define LED_HZ_MAX	1000
-#define FPath 		"/lib/firmware/isp.fw"
+#define FPath		"/lib/firmware/isp.fw"
 
 FILE *f_firmware;
 

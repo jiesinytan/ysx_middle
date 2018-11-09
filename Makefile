@@ -1,4 +1,4 @@
-DIR_ROOT ?= /home/steve_liu/ipcam_linux/sdk_v2.3.1_release
+DIR_ROOT ?= /home/jiesiny/SDK/sdk_v2.3_release
 DIR_TMPFS := $(DIR_ROOT)/tmpfs
 CC := $(DIR_ROOT)/toolchain/rsdk/bin/rsdk-linux-gcc
 AR := $(DIR_ROOT)/toolchain/rsdk/bin/rsdk-linux-ar
@@ -14,13 +14,13 @@ CFLAGS += $(EXTRA_CFLAGS)
 STATICLIBS = rtsisp h1encoder rtsjpeg rtsosd2 \
 	rtsosd rtsv4l2 rtscamkit \
 	rtsacodec rtsaec rtsmp3 opencore-amrnb aacenc sbc opus \
-	rtsio rtsgeom rtsamixer asound rtsresample rtstream rtsmd rtsbmp \
-	motion_tracking
+	rtsio rtsgeom rtsamixer asound rtsresample rtstream \
+	
 
 LINKLIBS = -lrtstream -lrtsresample -lrtsacodec -lrtsamixer -lrtsisp \
 	-lh1encoder -lrtsjpeg -lrtsosd2 -lrtsosd -lrtsv4l2 \
 	-lrtscamkit -lrtsaec -lrtsmp3 -lopencore-amrnb -laacenc -lsbc -lopus \
-	-lrtsio -lrtsgeom -lasound -lrtsbmp -lrtsmd -lmotion_tracking
+	-lrtsio -lrtsgeom -lasound
 
 LINKOPT = -Wl,-Bstatic -Wl,--whole-archive -lrtstream -Wl,--no-whole-archive \
 	  -lrtsacodec -lrtsamixer $(LINKLIBS) \
@@ -49,6 +49,10 @@ install:
 test:
 	$(MAKE) -C test
 
+nfs:
+	-mkdir -p ~/share/nfs/ysx_middle_test
+	-cp *.a ~/share/nfs/ysx_middle_test
+	-cp test/bin/static/*_test ~/share/nfs/ysx_middle_test
 clean:
 	-rm *.o
 	-rm *.a
