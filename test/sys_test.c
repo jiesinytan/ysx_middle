@@ -10,7 +10,6 @@
 
 #define LED_HZ	1
 #define LED_HZ_MAX	1000
-#define FPath		"/lib/firmware/isp.fw"
 
 FILE *f_firmware;
 
@@ -47,8 +46,6 @@ int main(int argc, char *argv[])
 	int o_burn = 0;
 	int o_led = 0;
 
-	__init_middleware_context();
-
 	while ((ch = getopt(argc, argv, "b:klh")) != -1) {
 		switch (ch) {
 		case 'b':
@@ -76,15 +73,9 @@ int main(int argc, char *argv[])
 	signal(SIGTERM, sig_handle);
 	signal(SIGINT, sig_handle);
 
+	QCamAV_Context_Init();
+
 	if (o_burn) {
-		f_firmware = fopen(FPath, "rb");
-		if (f_firmware == NULL) {
-			printf("open rd_audio file  fail.\n");
-			goto out;
-		}
-		fseek(f_firmware, 0, SEEK_END);
-		Length = ftell(f_firmware);
-		firmware = (const char *)malloc(Length);
 
 		ret = QCamFlashBurn(firmware);
 		if (ret) {
@@ -98,8 +89,17 @@ int main(int argc, char *argv[])
 		QCamLedSet(LED_MODE_BLUE, 1);
 		QCamLedSet(LED_MODE_YELLOW, 0);
 		sleep(5);
+
 		QCamLedSet(LED_MODE_BLUE, 0);
 		QCamLedSet(LED_MODE_YELLOW, 1);
+		sleep(5);
+
+		QCamLedSet(LED_MODE_BLUE, 2);
+		QCamLedSet(LED_MODE_YELLOW, 0);
+		sleep(5);
+
+		QCamLedSet(LED_MODE_BLUE, 0);
+		QCamLedSet(LED_MODE_YELLOW, 2);
 		sleep(5);
 	}
 
@@ -115,12 +115,10 @@ int main(int argc, char *argv[])
 	}
 
 out:
-	if (firmware != NULL) {
-		free(firmware);
+	if (firmware != NULL)
 		firmware = NULL;
-	}
 
-	__release_middleware_context();
+	QCamAV_Context_Release();
 	printf("exit code %d\n", ret);
 	return ret;
 

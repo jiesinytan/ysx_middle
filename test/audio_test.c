@@ -141,7 +141,7 @@ int main(int argc, char *argv[])
 		AudioOutput.volume = volume_set;
 	}
 
-	__init_middleware_context();
+	QCamAV_Context_Init();
 
 	if (audio_in ||  enaec) {
 		printf("Testing QcamAudio input dev mono...\n");
@@ -252,7 +252,7 @@ out:
 		f_wr_audio = NULL;
 	}
 
-	__release_middleware_context();
+	QCamAV_Context_Release();
 
 	printf("exit code %d\n", ret);
 	return ret;
