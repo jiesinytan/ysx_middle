@@ -56,7 +56,7 @@ void h264_cb(const struct timeval *tv, const void *data,
 	static uint64_t count;
 	int ret = 0;
 	if (key_frame && keyframe)
-		printf("keyframe = %d\n", keyframe);
+		printf("Stream0 keyframe = %d\n", keyframe);
 
 	if (!f_stream)
 		printf("file not exist, no space to save stream\n");
@@ -77,7 +77,7 @@ void h264_cb1(const struct timeval *tv, const void *data,
 	int ret = 0;
 
 	if (key_frame && keyframe)
-		printf("keyframe = %d\n", keyframe);
+		printf("Stream1 keyframe = %d\n", keyframe);
 
 	if (!f_stream1)
 		printf("file not exist, no space to save stream\n");
@@ -119,7 +119,7 @@ int test(int btest, int w, int h)
 				printf("open file %s fail\n", filename);
 			}
 			ret = fwrite(buf, 1, buflen, pfile);
-			printf("write [%d] bytes, want [%d] bytes\n", ret, buflen);
+			printf("Mjpeg write [%d] bytes, want [%d] bytes\n", ret, buflen);
 			fclose(pfile);
 
 			free(buf);
@@ -145,7 +145,7 @@ int test(int btest, int w, int h)
 			printf("open file %s fail\n", filename);
 		}
 		ret = fwrite(buf, 1, buflen, pfile);
-		printf("write [%d] bytes, want [%d] bytes\n", ret, buflen);
+		printf("Catch_YUV write [%d] bytes, want [%d] bytes\n", ret, buflen);
 		fclose(pfile);
 
 		free(buf);
@@ -166,7 +166,7 @@ int main(int argc, char *argv[])
 	int mul_count = 0;
 	QCamVideoInputOSD osd_info;
 	Invert = Snap = Catch_YUV = RM_Mode = OSD = Light = Change_bitrate = 0;
-	QCam_Video_Input_cb fun_cb[] = {h264_cb, h264_cb1, h264_cb2};
+	QCam_Video_Input_cb fun_cb[] = {h264_cb, h264_cb1};
 	FILE *stream_file[2] = {f_stream, f_stream1};
 
 	memset(&chn, 0, sizeof(QCamVideoInputChannel));
@@ -226,7 +226,7 @@ int main(int argc, char *argv[])
 			printf("\t-f set fps:\n");
 			printf("\t-v set bitrate_mode:(0:cbr, 1:vbr)\n");
 			printf("\t-b set bitrate:\n");
-			printf("\t-t  Turn on Mul stream test:1,2\n");
+			printf("\t-t Turn on Mul stream test:1,2\n");
 			printf("\t-i set Invert:\n");
 			printf("\t-s Catch Mjpeg:\n");
 			printf("\t-l Detect Light:\n");
@@ -450,7 +450,7 @@ out:
 
 	sleep(10);
 	ret = QCamVideoInput_Uninit();
-	for (int i = 0; i <= 2; i++) {
+	for (int i = 0; i <= 1; i++) {
 		if (stream_file[i] != NULL) {
 			fclose(stream_file[i]);
 			stream_file[i] = NULL;
