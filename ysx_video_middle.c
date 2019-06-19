@@ -23,32 +23,41 @@
 
 
 /* static void __attribute__((constructor(AV_INIT_NO))) */
-void __init_middleware_context(void)
+void QCamAV_Context_Init(void)
 {
 	rts_set_log_ident("MIDDLEWARE");
 	rts_set_log_mask(RTS_LOG_MASK_CONS);
+#ifndef RTSLOG
+	rts_clr_log_level();
+#endif
 
 	rts_av_init();
 	__init_sys_daemon();
 	__init_audio_server();
-	RTS_INFO("RTS AV INIT\n");
+	YSX_LOG(LOG_MW_INFO, "RTS AV INIT\n");
 }
 
 /* static void __attribute__((destructor(AV_INIT_NO))) */
-void __release_middleware_context(void)
+void QCamAV_Context_Release(void)
 {
 	__release_sys_daemon();
 	__release_audio_server();
 	rts_av_release();
-	RTS_INFO("RTS AV RELEASE\n");
+	YSX_LOG(LOG_MW_INFO, "RTS AV RELEASE\n");
 }
 
-static PthreadPool tpool;
-static int cur_stream_count;
+struct rts_m_pthreadpool *tpool;
 static struct rts_middle_stream vstream[STREAM_COUNT];
 static struct rts_m_ir ir;
 static struct rts_m_osd2_common osd2_com;
+static struct rts_m_jpg jpg;
+static struct rts_video_md_attr *md_attr;
+static struct rts_m_md md;
 
+static int __create_stream(struct rts_middle_stream *pstm,
+					QCamVideoInputChannel *pchn,
+					bool no_h264);
+static int __enable_stream(struct rts_middle_stream *pstm, bool no_h264);
 /*
 static struct rts_middle_stream *__find_stm_by_id(int id)
 {
@@ -65,6 +74,70 @@ static struct rts_middle_stream *__find_stm_by_id(int id)
 	return stm;
 }
 */
+static struct rts_m_pthreadpool *__pthreadpool_init(int size)
+{
+	struct rts_m_pthreadpool *tpool;
+
+	tpool = (struct rts_m_pthreadpool *)
+			calloc(1, sizeof(struct rts_m_pthreadpool));
+	if (!tpool) {
+		RTS_ERR("No memory to create pthreadpool\n");
+		return NULL;
+	}
+
+	tpool->tid = (pthread_t *)calloc(size, sizeof(pthread_t));
+	if (!tpool->tid) {
+		RTS_ERR("No memory to create pthreadpool\n");
+		return NULL;
+	}
+
+	tpool->pool_size = size;
+	tpool->current_size = 0;
+
+	return tpool;
+}
+
+static int __pthreadpool_add_task(struct rts_m_pthreadpool *tpool,
+				void *(*start_routine) (void *), void *arg)
+{
+	int ret = 0;
+
+	if (!tpool)
+		return -1;
+
+	if (tpool->current_size == tpool->pool_size) {
+		RTS_ERR("Pthreadpool is full\n");
+		return -1;
+	}
+
+	ret = pthread_create(&tpool->tid[tpool->current_size], NULL,
+						start_routine, arg);
+	if (ret < 0) {
+		RTS_ERR("Pthreadpool create thread fail\n");
+		return -1;
+	}
+
+	tpool->current_size++;
+
+	return 0;
+}
+
+static int __pthreadpool_destroy(struct rts_m_pthreadpool *tpool)
+{
+	int i;
+
+	if (!tpool)
+		return -1;
+
+	for (i = 0; i < tpool->current_size; i++)
+		pthread_join(tpool->tid[i], NULL);
+
+	free(tpool->tid);
+	free(tpool);
+
+	return 0;
+}
+
 
 static int __ld_time_pict(uint8_t *pbuf, uint16_t len, int index)
 {
@@ -86,13 +159,14 @@ static int __ld_time_pict(uint8_t *pbuf, uint16_t len, int index)
 
 exit:
 	RTS_SAFE_RELEASE(pfile, fclose);
-	RTS_ERR("Load osd time character lib fail, file[%s]\n", file_name);
+	YSX_LOG(LOG_MW_ERROR, "Load osd time character lib fail, file[%s]\n", file_name);
 	return -1;
 }
 
 static int __ld_osd_time_charlib()
 {
-	char patt[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':'};
+	char patt[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+								'/', ':'};
 	int i;
 	int ret = 0;
 
@@ -102,8 +176,7 @@ static int __ld_osd_time_charlib()
 		goto exit;
 
 	osd2_com.tm_img_2222 = (uint8_t *)
-		rts_calloc(sizeof(patt),
-				TM_ELEM_NUM * TM_PICT_SIZE);
+		rts_calloc(TM_ELEM_NUM, TM_PICT_SIZE);
 	if (osd2_com.tm_img_2222 == NULL)
 		goto exit;
 
@@ -122,7 +195,7 @@ exit:
 	if (osd2_com.tm_img_2222 != NULL)
 		RTS_SAFE_DELETE(osd2_com.tm_img_2222);
 
-	RTS_ERR("Load osd time character lib fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Load osd time character lib fail\n");
 	return -1;
 }
 
@@ -132,7 +205,7 @@ static int __set_osd_attr(struct rts_video_osd2_attr *osd_attr, int blkidx)
 
 	ret = rts_av_set_osd2_single(osd_attr, blkidx);
 	if (ret < 0) {
-		RTS_ERR("Set osd attr fail, ret[%d]\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "Set osd attr fail, ret[%d]\n", ret);
 		return -1;
 	}
 
@@ -178,7 +251,7 @@ static void __get_time(char *now_time, char *now_date, struct tm *tm)
 	sprintf(now_time, "%02d:%02d:%02d",
 		tm->tm_hour, tm->tm_min, tm->tm_sec);
 
-	sprintf(now_date, "%04d:%02d:%02d",
+	sprintf(now_date, "%04d/%02d/%02d",
 		tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
 }
 
@@ -192,8 +265,10 @@ static int __get_pict_from_pattern(struct text_info *txt)
 	int len = strlen(text);
 
 	for (i = 0; i < len; i++) {
-		if (text[i] == ':')
+		if (text[i] == '/')
 			val = 10;
+		else if (text[i] == ':')
+			val = 11;
 		else
 			val = (int)(text[i] - '0');
 
@@ -224,7 +299,7 @@ static int __set_osd2_timedate(struct rts_video_osd2_attr *attr,
 
 	ret = __get_pict_from_pattern(text);
 	if (ret < 0) {
-		RTS_ERR("Get time/date block picture fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Get time/date block picture fail\n");
 		return ret;
 	}
 
@@ -243,7 +318,7 @@ static int __set_osd2_timedate(struct rts_video_osd2_attr *attr,
 
 	ret = rts_av_set_osd2_single(attr, blkidx);
 	if (ret < 0)
-		RTS_ERR("Set osd attr fail, ret[%d]\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "Set osd attr fail, ret[%d]\n", ret);
 
 	return ret;
 }
@@ -252,7 +327,7 @@ static void __flush_osd_time()
 {
 	int need_update = 0;
 	char now_time[9] = "00:00:00";
-	char now_date[11] = "2018:01:01";
+	char now_date[11] = "2018/01/01";
 	struct tm tm;
 	struct text_info text_tm;
 	struct text_info text_date;
@@ -293,7 +368,7 @@ static void __flush_osd_time()
 			ret = __set_osd2_timedate(osd_attr, &text_tm,
 							OSD_TM_TIME_BLKIDX);
 			if (ret < 0)
-				RTS_ERR("Flush stream[%d] osd time fail\n", i);
+				YSX_LOG(LOG_MW_ERROR, "Flush stream[%d] osd time fail\n", i);
 
 
 			/* flush osd date */
@@ -309,8 +384,8 @@ static void __flush_osd_time()
 				ret = __set_osd2_timedate(osd_attr, &text_date,
 							OSD_TM_DATE_BLKIDX);
 				if (ret < 0) {
-					RTS_ERR("Flush stream[%d] osd", i);
-					RTS_ERR("date fail\n");
+					YSX_LOG(LOG_MW_ERROR, "Flush stream[%d] osd", i);
+					YSX_LOG(LOG_MW_ERROR, "date fail\n");
 				}
 			}
 		}
@@ -321,8 +396,6 @@ static void __flush_osd_time()
 
 void *__osd_supervisor(void *arg)
 {
-	osd2_com.run = 1;
-
 	while (osd2_com.run)
 		__flush_osd_time();
 
@@ -339,10 +412,12 @@ static int __start_osd_supervisor(void)
 		goto exit;
 	osd2_com.osd_tid.stat = true;
 
+	osd2_com.run = 1;
+
 	return 0;
 
 exit:
-	RTS_ERR("Start osd supervisor fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Start osd supervisor fail\n");
 	return -1;
 }
 
@@ -370,7 +445,7 @@ static int __osd_sanity_check(int channel, QCamVideoInputOSD *pOsdInfo)
 
 	if ((vstream[channel].stat != RTS_STM_STAT_OK)
 			|| !pchn || (pchn->stat != RTS_CHN_STAT_OK)) {
-		RTS_ERR("Stream is not ok, set osd fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Stream is not ok, set osd fail\n");
 		goto exit;
 	}
 
@@ -390,8 +465,8 @@ static int __osd_sanity_check(int channel, QCamVideoInputOSD *pOsdInfo)
 	return 0;
 
 exit:
-	RTS_INFO("file[%s]\n", pOsdInfo->pic_path);
-	RTS_ERR("[QCamVideoInput_SetOSD] sanity check fail\n");
+	YSX_LOG(LOG_MW_INFO, "file[%s]\n", pOsdInfo->pic_path);
+	YSX_LOG(LOG_MW_ERROR, "[QCamVideoInput_SetOSD] sanity check fail\n");
 	return -1;
 }
 
@@ -427,7 +502,7 @@ exit:
 	*buf = NULL;
 	*len = 0;
 
-	RTS_ERR("Get osd picture buffer from file fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Get osd picture buffer from file fail\n");
 
 	return -1;
 }
@@ -442,7 +517,7 @@ static int __update_osd_pict(int channel, QCamVideoInputOSD *pOsdInfo)
 	pchn = &(vstream[channel].osd);
 
 	if (pOsdInfo->pic_enable == pchn->osd_info.pict.enable) {
-		RTS_INFO("OSD picture status not changed\n");
+		YSX_LOG(LOG_MW_INFO, "OSD picture status not changed\n");
 		return 0;
 	}
 
@@ -496,7 +571,7 @@ static int __update_osd_time(int channel, QCamVideoInputOSD *pOsdInfo)
 	pchn = &(vstream[channel].osd);
 
 	if (pOsdInfo->time_enable == pchn->osd_info.tm.enable) {
-		RTS_INFO("OSD time status not changed\n");
+		YSX_LOG(LOG_MW_INFO, "OSD time status not changed\n");
 		return 0;
 	}
 
@@ -523,7 +598,7 @@ static int __update_osd_time(int channel, QCamVideoInputOSD *pOsdInfo)
 		ret |= __set_osd_attr(osd_attr, OSD_TM_DATE_BLKIDX);
 
 		if (ret < 0)
-			RTS_ERR("Close osd time fail\n");
+			YSX_LOG(LOG_MW_ERROR, "Close osd time fail\n");
 		else
 			pchn->osd_info.tm.enable = 0;
 
@@ -547,40 +622,77 @@ static int __set_isp_ctrl(int id, int value)
 
 exit:
 	if (ret < 0)
-		RTS_ERR("Set isp ctrl fail, id[%d], ret[%d]\n", id, ret);
+		YSX_LOG(LOG_MW_ERROR, "Set isp ctrl fail, id[%d], ret[%d]\n", id, ret);
 	return ret;
 }
 
-static int __register_ir_gpio(void)
+/* this func only set ircut gpio
+ * cause these 2 gpio was requested on rcS, and it's prohibited to free
+ * or it will cause sensor temperature high */
+static void __set_ircut_gpio_value(int id, int value)
 {
-	ir.gpio_ir_cut = NULL;
+	char cmd[64] = {0};
+
+	sprintf(cmd, "echo %d > /sys/class/gpio/gpio%d/value", value, id);
+	system(cmd);
+}
+
+static void __try_init_ircut_gpio(int id)
+{
+	char cmd[64] = {0};
+	char f_gpio[64] = {0};
+	int ret = 0;
+
+	sprintf(f_gpio, "/sys/class/gpio/gpio%d", id);
+
+	ret =  access(f_gpio, F_OK);
+	if (ret == 0)
+		return;
+
+	sprintf(cmd, "echo %d > /sys/class/gpio/export", id);
+	system(cmd);
+	sprintf(cmd, "echo out > /sys/class/gpio/gpio%d/direction", id);
+	system(cmd);
+
+	return;
+}
+
+static int __init_ir_gpio(void)
+{
 	ir.gpio_ir_led = NULL;
-
-	ir.gpio_ir_cut = rts_io_gpio_request(SYSTEM_GPIO, GPIO_IR_CUT);
-	if (ir.gpio_ir_cut == NULL)
-		goto exit;
-
-	rts_io_gpio_set_direction(ir.gpio_ir_cut, GPIO_OUTPUT);
 
 	ir.gpio_ir_led = rts_io_gpio_request(SYSTEM_GPIO, GPIO_IR_LED);
 	if (ir.gpio_ir_led == NULL)
 		goto exit;
 
 	rts_io_gpio_set_direction(ir.gpio_ir_led, GPIO_OUTPUT);
+	rts_io_gpio_set_value(ir.gpio_ir_led, GPIO_IR_LED_DAY);
+
+	__try_init_ircut_gpio(GPIO_IR_CUT_0);
+	__try_init_ircut_gpio(GPIO_IR_CUT_1);
+
+	/* sleep ircut */
+	__set_ircut_gpio_value(GPIO_IR_CUT_0, GPIO_IR_CUT_LOW);
+	__set_ircut_gpio_value(GPIO_IR_CUT_1, GPIO_IR_CUT_LOW);
 
 	return 0;
 
 exit:
-	RTS_ERR("Register IR gpio fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Register IR gpio fail\n");
 	return -1;
 }
 
 static void free_ir_gpio(void)
 {
-	if (ir.gpio_ir_cut != NULL)
-		rts_io_gpio_free(ir.gpio_ir_cut);
+	int ret = 0;
+
+	/* IRCUT gpio is prohibited to free
+	 * or it will cause sensor temperature high */
 	if (ir.gpio_ir_led != NULL)
-		rts_io_gpio_free(ir.gpio_ir_led);
+		ret = rts_io_gpio_free(ir.gpio_ir_led);
+
+	if (ret < 0)
+		YSX_LOG(LOG_MW_ERROR, "Free ir gpio fail\n");
 }
 
 /* @return digital averaging filtering value, -1 on error
@@ -597,7 +709,7 @@ static int __get_adc_smooth_value(int chn)
 
 	value = rts_io_adc_get_value(ADC_CHN);
 	if (value < 0) {
-		RTS_ERR("Warning get ADC value fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Warning get ADC value fail\n");
 		return -1;
 	}
 
@@ -617,15 +729,23 @@ static int __switch_ir_gpio(enum rts_m_ir_stat mode)
 	int ret = 0;
 
 	if (mode == DAY) {
-		ret |= rts_io_gpio_set_value(ir.gpio_ir_led, GPIO_IR_LED_DAY);
-		ret |= rts_io_gpio_set_value(ir.gpio_ir_cut, GPIO_IR_CUT_DAY);
+		ret = rts_io_gpio_set_value(ir.gpio_ir_led, GPIO_IR_LED_DAY);
+		__set_ircut_gpio_value(GPIO_IR_CUT_0, GPIO_IR_CUT_LOW);
+		__set_ircut_gpio_value(GPIO_IR_CUT_1, GPIO_IR_CUT_HIGH);
+		usleep(50000);
+		/* sleep ircut */
+		__set_ircut_gpio_value(GPIO_IR_CUT_1, GPIO_IR_CUT_LOW);
 	} else {
-		ret |= rts_io_gpio_set_value(ir.gpio_ir_led, GPIO_IR_LED_NIGHT);
-		ret |= rts_io_gpio_set_value(ir.gpio_ir_cut, GPIO_IR_CUT_NIGHT);
+		ret = rts_io_gpio_set_value(ir.gpio_ir_led, GPIO_IR_LED_NIGHT);
+		__set_ircut_gpio_value(GPIO_IR_CUT_0, GPIO_IR_CUT_HIGH);
+		__set_ircut_gpio_value(GPIO_IR_CUT_1, GPIO_IR_CUT_LOW);
+		usleep(50000);
+		/* sleep ircut */
+		__set_ircut_gpio_value(GPIO_IR_CUT_0, GPIO_IR_CUT_LOW);
 	}
 
 	if (ret < 0)
-		RTS_ERR("Switch IR gpio fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Switch IR gpio fail\n");
 	return ret;
 }
 
@@ -641,12 +761,12 @@ static void __switch_daynight_mode(enum rts_m_ir_stat mode)
 	ret |= __switch_ir_gpio(mode);
 
 	if (ret < 0) {
-		RTS_ERR("Switch IR mode fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Switch IR mode fail\n");
 		return;
 	}
 
 	ir.ir_stat = mode;
-	RTS_INFO("Switch to [%s] mode\n", mode ? "day" : "night");
+	YSX_LOG(LOG_MW_INFO, "Switch to [%s] mode\n", mode ? "day" : "night");
 }
 
 void *__auto_ir_thread(void *arg)
@@ -654,7 +774,7 @@ void *__auto_ir_thread(void *arg)
 	int adc_value = 0;
 	int i;
 
-	RTS_INFO("Auto IR working\n");
+	YSX_LOG(LOG_MW_INFO, "Auto IR working\n");
 
 	while (!ir.auto_ir_exit) {
 		pthread_mutex_lock(&ir.mutex);
@@ -662,6 +782,7 @@ void *__auto_ir_thread(void *arg)
 
 		for (i = 0; i < ADC_FACTOR; i++) {
 			adc_value = __get_adc_smooth_value(ADC_CHN);
+			usleep(20000);
 		}
 
 		if (adc_value >= ADC_DAY_THR)
@@ -702,12 +823,10 @@ static int __start_auto_ir(void)
 	ir.ir_stat = UNKNOWN; /* TODO what is the start stat */
 	ir.ir_mode = QCAM_IR_MODE_AUTO;
 	ir.ir_tid.stat = false;
-	ir.gpio_ir_cut = NULL;
-	ir.gpio_ir_led = NULL;
 	ir.auto_ir_stat = AUTO_IR_STOP;
 
 
-	ret = __register_ir_gpio();
+	ret = __init_ir_gpio();
 	if (ret < 0)
 		goto exit;
 
@@ -721,7 +840,7 @@ static int __start_auto_ir(void)
 	return 0;
 
 exit:
-	RTS_ERR("Start auto IR fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Start auto IR fail\n");
 	return -1;
 }
 
@@ -753,14 +872,15 @@ static void __set_video_stream_info(int init)
 	int i;
 
 	for (i = 0; i < STREAM_COUNT; i++) {
-		__init_chn_info(&vstream[i].isp, RTS_MIDDLE_VIDEO_CHN);
-		__init_chn_info(&vstream[i].osd, RTS_MIDDLE_VIDEO_CHN);
-		__init_chn_info(&vstream[i].h264, RTS_MIDDLE_VIDEO_CHN);
-		__init_chn_info(&vstream[i].jpg, RTS_MIDDLE_VIDEO_CHN);
+		__init_chn_info(&vstream[i].isp, RTS_MIDDLE_VIDEO_CHN_ISP);
+		__init_chn_info(&vstream[i].osd, RTS_MIDDLE_VIDEO_CHN_OSD);
+		__init_chn_info(&vstream[i].h264, RTS_MIDDLE_VIDEO_CHN_H264);
+		__init_chn_info(&vstream[i].jpg, RTS_MIDDLE_VIDEO_CHN_MJPEG);
 
 		vstream[i].id = i;
 		vstream[i].stat = RTS_STM_STAT_UNINIT;
 		vstream[i].h264_ctrl = NULL;
+		vstream[i].has_h264 = 0;
 		vstream[i].exit = 0;
 		if (init)
 			pthread_mutex_init(&vstream[i].mutex, NULL);
@@ -800,6 +920,102 @@ static int __switch_time_stamp(void)
 }
 #endif
 
+/* multiplex stream support yuv/mjpeg capture */
+static int __create_multiplex_stm(void)
+{
+	int ret = 0;
+	QCamVideoInputChannel chn = {
+		.channelId = MULTIPLEX_STM_ID,
+		/* initial resolution(mjpeg)
+		 * it's may be changed by capture yuv */
+		.res = QCAM_VIDEO_RES_360P,
+		.fps = MULTIPLEX_STM_FPS,
+		.bitrate = -1,
+		.gop = -1,
+		.vbr = -1,
+		.cb = NULL
+	};
+
+	ret = __create_stream(&vstream[MULTIPLEX_STM_ID], &chn, true);
+	if (ret < 0)
+		goto exit;
+	ret = __enable_stream(&vstream[MULTIPLEX_STM_ID], true);
+	if (ret < 0)
+		goto exit;
+
+	YSX_LOG(LOG_MW_INFO, "Create multiplex stream success\n");
+
+	return 0;
+
+exit:
+	YSX_LOG(LOG_MW_ERROR, "Create multiplex stream fail, mjpeg/yuv capture may wrong\n");
+
+	return -1;
+}
+
+static int __init_md(void)
+{
+	int ret = 0;
+	struct rts_video_md_attr *attr = NULL;
+
+	md_attr = NULL;
+	ret = rts_av_query_isp_md(&md_attr, MD_4x3_WIDTH, MD_4x3_HEIGHT);
+	if (ret < 0) {
+		YSX_LOG(LOG_MW_ERROR, "Query isp md failed\n");
+		return -1;
+	}
+
+	//Detected area check
+	if ((MD_START_X + MD_AREA_COL * CELL_W) > MD_4x3_WIDTH) {
+		YSX_LOG(LOG_MW_ERROR, "[QCamVideoMd_Start] X-axis out of bounds\n");
+		return -1;
+	}
+	if ((MD_START_Y + MD_AREA_ROW * CELL_H > MD_4x3_HEIGHT)) {
+		YSX_LOG(LOG_MW_ERROR, "[QCamVideoMd_Start] Y-axis out of bounds\n");
+		return -1;
+	}
+
+	attr = md_attr;
+	if (attr->number < 1) {
+		YSX_LOG(LOG_MW_ERROR, "[Error] Md attr number < 1\n");
+		return -1;
+	}
+
+	struct rts_video_md_block *pb = attr->blocks;
+	int len;
+
+	len = RTS_DIV_ROUND_UP(MD_AREA_ROW * MD_AREA_COL, 8);
+
+	pb->data_mode_mask |= RTS_VIDEO_MD_DATA_TYPE_RLTPRE;
+	pb->detect_mode = RTS_VIDEO_MD_DETECT_HW;
+	pb->area.start.x = MD_START_X;
+	pb->area.start.y = MD_START_Y;
+	pb->area.cell.width = CELL_W;
+	pb->area.cell.height = CELL_H;
+	pb->area.size.rows = MD_AREA_ROW;
+	pb->area.size.columns = MD_AREA_COL;
+
+	if (pb->area.bitmap.length < len) {
+			pb->area.bitmap.vm_addr
+				= rts_realloc(pb->area.bitmap.vm_addr, len);
+			pb->area.bitmap.length = len;
+		}
+
+	memset(pb->area.bitmap.vm_addr, 0xff, len);
+
+	pb->sensitivity = MD_SENSITIVITY;
+	pb->percentage = MD_PERCENTAGE;
+	pb->frame_interval = MD_FRAME_INTERVAL;
+
+	pb->enable = 0;
+
+	ret = rts_av_set_isp_md(attr);
+	if (ret < 0)
+		YSX_LOG(LOG_MW_ERROR, "Set isp md failed, ret[%d]\n",ret);
+
+	return ret;
+}
+
 int QCamVideoInput_Init()
 {
 	int ret = 0;
@@ -808,7 +1024,7 @@ int QCamVideoInput_Init()
 	/*TODO monotonic time is recommend*/
 	ret = __switch_time_stamp();
 	if (ret < 0) {
-		RTS_ERR("Switch time stamp type to realtime fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Switch time stamp type to realtime fail\n");
 		return -1;
 	}
 #endif
@@ -826,13 +1042,21 @@ int QCamVideoInput_Init()
 
 	__init_video_stream_info();
 
+	ret = __create_multiplex_stm();
+	if (ret < 0)
+		return -1;
+
+	ret = __init_md();
+	if (ret < 0)
+		return -1;
+
 	return 0;
 }
 
 static int __add_chn_sanity_check(QCamVideoInputChannel *pchn)
 {
-	/* there's one stream only equipped with isp channel */
-	if ((pchn->channelId < 0) || (pchn->channelId >= (STREAM_COUNT - 1)))
+	/* there's only two h264 stream */
+	if ((pchn->channelId < 0) || (pchn->channelId >= (STREAM_COUNT - 2)))
 		goto exit;
 	if ((pchn->res <= 0) || (pchn->res > 4))
 		goto exit;
@@ -851,7 +1075,7 @@ static int __add_chn_sanity_check(QCamVideoInputChannel *pchn)
 	return 0;
 
 exit:
-	RTS_ERR("[QCamVideoInput_AddChannel] sanity check fail\n");
+	YSX_LOG(LOG_MW_ERROR, "[QCamVideoInput_AddChannel] sanity check fail\n");
 	return -1;
 }
 
@@ -869,16 +1093,16 @@ static void __transform_resolution(QCAM_VIDEO_RESOLUTION res,
 		break;
 	case QCAM_VIDEO_RES_360P:
 		*width = 640;
-		*height = 320;
+		*height = 360;
 		break;
 	case QCAM_VIDEO_RES_1080P:
 		/*TODO*/
 		*width = 1920;
 		*height = 1080;
-		RTS_INFO("~~~~~~Please confirm the 1080p is right\n");
+		YSX_LOG(LOG_MW_INFO, "~~~~~~Please confirm the 1080p is right\n");
 		break;
 	default:
-		RTS_ERR("Unknown resolution\n");
+		YSX_LOG(LOG_MW_ERROR, "Unknown resolution\n");
 		break;
 	}
 }
@@ -886,7 +1110,8 @@ static void __transform_resolution(QCAM_VIDEO_RESOLUTION res,
 static void __init_isp_params(QCamVideoInputChannel *pchn,
 				struct rts_m_isp_params *isp_para)
 {
-	int width, height;
+	int width = -1;
+	int height = -1;
 
 	if (pchn->fps >= 20)
 		isp_para->attr.isp_buf_num = 3;
@@ -930,12 +1155,12 @@ static int __create_isp_chn(struct rts_middle_stream *pstm,
 	pstm->isp.width = isp_para->profile.video.width;
 	pstm->isp.height = isp_para->profile.video.height;
 
-	RTS_INFO("Stream[%d] create isp chn success\n", pstm->id);
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] create isp chn success\n", pstm->id);
 
 	return 0;
 
 exit:
-	RTS_ERR("Stream[%d] isp chn fail, err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] isp chn fail, err[%d], ret[%d]\n",
 			pstm->id, pstm->isp.err, ret);
 	pstm->isp.stat = RTS_CHN_STAT_FAIL;
 	pstm->stat = RTS_STM_STAT_ISP_FAIL;
@@ -956,12 +1181,12 @@ static int __create_osd_chn(struct rts_middle_stream *pstm)
 	pstm->osd.stat = RTS_CHN_STAT_OK;
 	pstm->osd.err = RTS_CHN_E_OK;
 
-	RTS_INFO("Stream[%d] create osd chn success\n", pstm->id);
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] create osd chn success\n", pstm->id);
 
 	return 0;
 
 exit:
-	RTS_ERR("Stream[%d] osd chn fail,err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] osd chn fail,err[%d], ret[%d]\n",
 			pstm->id, pstm->osd.err, ret);
 	pstm->osd.stat = RTS_CHN_STAT_FAIL;
 	pstm->stat = RTS_STM_STAT_OSD_FAIL;
@@ -982,17 +1207,17 @@ static int __query_osd2_attr(struct rts_middle_stream *pstm)
 	ret = rts_av_set_osd2_color_table(pstm->osd_attr, TM_PICT_FORMAT,
 			0x00000080, 0, 0, 0, 0);
 	if (ret)
-		RTS_ERR("Set_osd_color_table failed ,ret[%d]\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "Set_osd_color_table failed ,ret[%d]\n", ret);
 
 	pstm->osd.stat = RTS_CHN_STAT_OK;
 	pstm->osd.err = RTS_CHN_E_OK;
 
-	RTS_INFO("Stream[%d] query osd attr success\n", pstm->id);
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] query osd attr success\n", pstm->id);
 
 	return 0;
 
 exit:
-	RTS_ERR("Stream[%d] query osd attr fail, err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] query osd attr fail, err[%d], ret[%d]\n",
 			pstm->id, pstm->osd.err, ret);
 	pstm->osd.stat = RTS_CHN_STAT_FAIL;
 	pstm->stat = RTS_STM_STAT_OSD_FAIL;
@@ -1016,12 +1241,12 @@ static int __create_jpg_chn(struct rts_middle_stream *pstm)
 	pstm->jpg.stat = RTS_CHN_STAT_OK;
 	pstm->jpg.err = RTS_CHN_E_OK;
 
-	RTS_INFO("Stream[%d] create mjpeg chn success\n", pstm->id);
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] create mjpeg chn success\n", pstm->id);
 
 	return 0;
 
 exit:
-	RTS_ERR("Stream[%d] mjpeg chn fail,err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] mjpeg chn fail,err[%d], ret[%d]\n",
 			pstm->id, pstm->jpg.err, ret);
 	pstm->jpg.stat = RTS_CHN_STAT_FAIL;
 	pstm->stat = RTS_STM_STAT_JPEG_FAIL;
@@ -1049,12 +1274,12 @@ static int __set_jpg_ctrl(struct rts_middle_stream *pstm)
 	pstm->jpg.stat = RTS_CHN_STAT_OK;
 	pstm->jpg.err = RTS_CHN_E_OK;
 
-	RTS_INFO("Stream[%d] set mjpeg ctrl success\n", pstm->id);
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] set mjpeg ctrl success\n", pstm->id);
 
 	return 0;
 
 exit:
-	RTS_ERR("Stream[%d] set mjpeg ctrl fail, err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] set mjpeg ctrl fail, err[%d], ret[%d]\n",
 			pstm->id, pstm->jpg.err, ret);
 	pstm->jpg.stat = RTS_CHN_STAT_FAIL;
 	pstm->stat = RTS_STM_STAT_JPEG_FAIL;
@@ -1120,12 +1345,12 @@ static int __create_h264_chn(struct rts_middle_stream *pstm,
 	pstm->h264.stat = RTS_CHN_STAT_OK;
 	pstm->h264.err = RTS_CHN_E_OK;
 
-	RTS_INFO("Stream[%d] create h264 chn success\n");
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] create h264 chn success\n", pstm->id);
 
 	return 0;
 
 exit:
-	RTS_ERR("Stream[%d] h264 chn fail,err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] h264 chn fail,err[%d], ret[%d]\n",
 			pstm->id, pstm->h264.err, ret);
 	pstm->h264.stat = RTS_CHN_STAT_FAIL;
 	pstm->stat = RTS_STM_STAT_H264_FAIL;
@@ -1147,11 +1372,13 @@ int __destroy_chn(Mchannel *pchn)
 		goto exit;
 	}
 
+	pchn->stat = RTS_CHN_STAT_UNINIT;
+
 	return 0;
 
 exit:
 	pchn->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Destroy chn fail, type[%d], ret[%d]\n", pchn->type, ret);
+	YSX_LOG(LOG_MW_ERROR, "Destroy chn fail, type[%d], ret[%d]\n", pchn->type, ret);
 	return -1;
 }
 
@@ -1175,7 +1402,7 @@ int __bind_chn(Mchannel *pchn1, Mchannel *pchn2)
 
 exit:
 	pchn1->stat = pchn2->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Bind chn fail, ret[%d]\n", ret);
+	YSX_LOG(LOG_MW_ERROR, "Bind chn fail, ret[%d]\n", ret);
 	return -1;
 }
 
@@ -1199,7 +1426,7 @@ int __unbind_chn(Mchannel *pchn1, Mchannel *pchn2)
 
 exit:
 	pchn1->stat = pchn2->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Unbind chn fail, ret[%d]\n", ret);
+	YSX_LOG(LOG_MW_ERROR, "Unbind chn fail, ret[%d]\n", ret);
 	return -1;
 }
 
@@ -1222,7 +1449,7 @@ int __enable_chn(Mchannel *pchn)
 
 exit:
 	pchn->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Enable chn fail, type[%d], ret[%d]\n", pchn->type, ret);
+	YSX_LOG(LOG_MW_ERROR, "Enable chn fail, type[%d], ret[%d]\n", pchn->type, ret);
 	return -1;
 }
 
@@ -1245,12 +1472,13 @@ int __disable_chn(Mchannel *pchn)
 
 exit:
 	pchn->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Disable chn fail, type[%d], ret[%d]\n", pchn->type, ret);
+	YSX_LOG(LOG_MW_ERROR, "Disable chn fail, type[%d], ret[%d]\n", pchn->type, ret);
 	return -1;
 }
 
 static int __create_stream(struct rts_middle_stream *pstm,
-					QCamVideoInputChannel *pchn)
+					QCamVideoInputChannel *pchn,
+					bool no_h264)
 {
 	struct rts_m_isp_params isp_para;
 	struct rts_m_h264_params h264_para;
@@ -1268,16 +1496,16 @@ static int __create_stream(struct rts_middle_stream *pstm,
 	if (ret < 0)
 		goto exit;
 
-	if (pchn->channelId == 0) {
-		ret = __create_jpg_chn(pstm);
+	ret = __create_jpg_chn(pstm);
+	if (ret < 0)
+		goto exit;
+
+	if (!no_h264) {
+		__init_h264_params(pchn, &h264_para);
+		ret = __create_h264_chn(pstm, &h264_para);
 		if (ret < 0)
 			goto exit;
 	}
-
-	__init_h264_params(pchn, &h264_para);
-	ret = __create_h264_chn(pstm, &h264_para);
-	if (ret < 0)
-		goto exit;
 
 	ret = __bind_chn(&pstm->isp, &pstm->osd);
 	if (ret < 0)
@@ -1287,15 +1515,37 @@ static int __create_stream(struct rts_middle_stream *pstm,
 	if (ret < 0)
 		goto exit;
 
-	ret = __bind_chn(&pstm->osd, &pstm->h264);
-	if (ret < 0)
-		goto exit;
-
-	if (pchn->channelId == 0) {
-		ret = __bind_chn(&pstm->osd, &pstm->jpg);
+	if (!no_h264) {
+		ret = __bind_chn(&pstm->osd, &pstm->h264);
 		if (ret < 0)
 			goto exit;
 	}
+
+	ret = __bind_chn(&pstm->osd, &pstm->jpg);
+	if (ret < 0)
+		goto exit;
+
+	pstm->cb = pchn->cb;
+	pstm->stat = RTS_STM_STAT_OK;
+
+exit:
+	pthread_mutex_unlock(&pstm->mutex);
+
+	if (ret < 0)
+		YSX_LOG(LOG_MW_ERROR, "Create stream[%d] fail\n", pstm->id);
+	else {
+		YSX_LOG(LOG_MW_INFO, "Create stream[%d] success\n", pstm->id);
+		YSX_LOG(LOG_MW_INFO, "resolution[%dx%d], fps[%d]\n",
+				pstm->isp.width,
+				pstm->isp.height, pstm->isp.fps);
+	}
+
+	return ret;
+}
+
+static int __enable_stream(struct rts_middle_stream *pstm, bool no_h264)
+{
+	int ret = 0;
 
 	ret = __enable_chn(&pstm->isp);
 	if (ret < 0)
@@ -1305,25 +1555,20 @@ static int __create_stream(struct rts_middle_stream *pstm,
 	if (ret < 0)
 		goto exit;
 
-	ret = __enable_chn(&pstm->h264);
-	if (ret < 0)
-		goto exit;
-
-	if (pchn->channelId == 0) {
-		ret = __enable_chn(&pstm->jpg);
-		if (ret < 0)
-			goto exit;
-		ret =  __set_jpg_ctrl(pstm);
+	if (!no_h264) {
+		ret = __enable_chn(&pstm->h264);
 		if (ret < 0)
 			goto exit;
 	}
 
-	pstm->cb = pchn->cb;
-	pstm->stat = RTS_STM_STAT_OK;
+	YSX_LOG(LOG_MW_INFO, "Enbale stream[%d] success\n", pstm->id);
+
+	return 0;
 
 exit:
-	pthread_mutex_unlock(&pstm->mutex);
-	return ret;
+	YSX_LOG(LOG_MW_ERROR, "Enbale stream[%d] fail\n ");
+	pstm->stat = RTS_STM_STAT_FAIL;
+	return -1;
 }
 
 static int __destroy_stream(struct rts_middle_stream *pstm)
@@ -1374,6 +1619,10 @@ static int __destroy_stream(struct rts_middle_stream *pstm)
 	if (pstm->isp.stat != RTS_CHN_STAT_UNINIT)
 		ret |= __destroy_chn(&pstm->isp);
 
+	if (ret == 0) {
+		pstm->stat = RTS_STM_STAT_UNINIT;
+		YSX_LOG(LOG_MW_INFO, "Destroy stream[%d] success\n", pstm->id);
+	}
 
 	pthread_mutex_unlock(&pstm->mutex);
 
@@ -1391,22 +1640,19 @@ int QCamVideoInput_AddChannel(QCamVideoInputChannel ch)
 
 	pstm = &vstream[ch.channelId];
 	if (pstm->stat != RTS_STM_STAT_UNINIT) {
-		RTS_ERR("Stream[%d] already initialized\n", ch.channelId);
+		YSX_LOG(LOG_MW_ERROR, "Stream[%d] already initialized\n", ch.channelId);
 		return -1;
 	}
 
-	ret = __create_stream(pstm, &ch);
+	ret = __create_stream(pstm, &ch, false);
 	if (ret < 0)
 		goto exit;
 
-	cur_stream_count++;
-
-	RTS_INFO("Create stream[%d] success\n", ch.channelId);
+	pstm->has_h264 = 1;
 
 	return 0;
 
 exit:
-	RTS_ERR("Create stream[%d] fail, ret[%d]\n", ch.channelId, ret);
 	/*TODO*/
 	/*__dump_stream(pstm);*/
 	return -1;
@@ -1440,7 +1686,7 @@ int __start_chn(Mchannel *pchn, int dir)
 
 exit:
 	pchn->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Start chn fail, type[%d], dir[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Start chn fail, type[%d], dir[%d], ret[%d]\n",
 						pchn->type, dir, ret);
 	return -1;
 }
@@ -1473,12 +1719,12 @@ int __stop_chn(Mchannel *pchn, int dir)
 
 exit:
 	pchn->stat = RTS_CHN_STAT_FAIL;
-	RTS_ERR("Stop chn fail, type[%d], dir[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Stop chn fail, type[%d], dir[%d], ret[%d]\n",
 						pchn->type, dir, ret);
 	return -1;
 }
 
-static void __stream_thread(void *arg)
+static void *__stream_thread(void *arg)
 {
 	struct rts_middle_stream *pstm = NULL;
 	struct rts_av_buffer *buffer = NULL;
@@ -1490,7 +1736,7 @@ static void __stream_thread(void *arg)
 
 	ret = __start_chn(&pstm->h264, RTS_RECV);
 	if (ret < 0)
-		return;
+		return NULL;
 
 	while (!pstm->exit) {
 		usleep(1000);
@@ -1529,28 +1775,42 @@ static void __stream_thread(void *arg)
 	}
 
 	__stop_chn(&pstm->h264, RTS_RECV);
+
+	return NULL;
 }
 
+/* start h264 stream */
 int QCamVideoInput_Start()
 {
 	int ret = 0;
+	int h264_stm_count = 0;
 	int i;
 
-	tpool = rts_pthreadpool_init(cur_stream_count);
+	for (i = 0; i < (STREAM_COUNT - 2); i++) {
+		if (vstream[i].has_h264)
+			h264_stm_count++;
+	}
+
+	tpool = __pthreadpool_init(h264_stm_count);
 	if (!tpool)
 		return -1;
 
-	for (i = 0; i < cur_stream_count; i++) {
-		ret = rts_pthreadpool_add_task(tpool, __stream_thread,
-							&vstream[i], NULL);
-		if (ret < 0) {
-			RTS_ERR("Add stream thread fail\n");
+	for (i = 0; i < (STREAM_COUNT - 2); i++) {
+		if (!vstream[i].has_h264)
+			continue;
+
+		ret = __enable_stream(&vstream[i], false);
+		if (ret < 0)
 			return -2;
+
+		ret = __pthreadpool_add_task(tpool, __stream_thread,
+							(void *)&vstream[i]);
+		if (ret < 0) {
+			YSX_LOG(LOG_MW_ERROR, "Add stream thread fail\n");
+			return -3;
 		}
 	}
 
-	/*wait pthread pool work*/
-	usleep(50000);
 
 	return 0;
 }
@@ -1565,10 +1825,14 @@ int QCamVideoInput_Uninit()
 	int ret = 0;
 	int i;
 
-	for (i = 0; i < cur_stream_count; i++)
+	rts_av_release_isp_md(md_attr);
+
+	__release_auto_ir();
+
+	for (i = 0; i < (STREAM_COUNT - 2); i++)
 		__stop_stream(&vstream[i]);
 
-	RTS_SAFE_RELEASE(tpool, rts_pthreadpool_destroy);
+	RTS_SAFE_RELEASE(tpool, __pthreadpool_destroy);
 
 	if (osd2_com.run)
 		__stop_osd_supervisor();
@@ -1576,18 +1840,12 @@ int QCamVideoInput_Uninit()
 	for (i = 0; i < STREAM_COUNT; i++) {
 		ret = __destroy_stream(&vstream[i]);
 		if (ret < 0)
-			goto exit;
+			YSX_LOG(LOG_MW_ERROR, "Destroy stream[%d] fail, ret[%d]\n", i, ret);
 	}
 
 	__deinit_video_stream_info();
 
-	__release_auto_ir();
-
-	return 0;
-
-exit:
-	RTS_ERR("Destroy stream[%d] fail, ret[%d]\n", i, ret);
-	return -1;
+	return ret;
 }
 
 static int __update_h264_ctrl(struct rts_middle_stream *pstm,
@@ -1604,20 +1862,20 @@ static int __update_h264_ctrl(struct rts_middle_stream *pstm,
 		if (pstm->h264_ctrl->bitrate_mode == RTS_BITRATE_MODE_CBR)
 			pstm->h264_ctrl->bitrate = bitrate;
 		if (pstm->h264_ctrl->bitrate_mode == RTS_BITRATE_MODE_VBR)
-			RTS_INFO("VBR mode bitrate is auto changed by sdk\n");
+			YSX_LOG(LOG_MW_INFO, "VBR mode bitrate is auto changed by sdk\n");
 	}
 
 	if (qp != -1) {
 		if (pstm->h264_ctrl->bitrate_mode == RTS_BITRATE_MODE_VBR)
 			pstm->h264_ctrl->qp = qp;
 		if (pstm->h264_ctrl->bitrate_mode == RTS_BITRATE_MODE_CBR)
-			RTS_INFO("CBR mode qp is not recommend to change\n");
+			YSX_LOG(LOG_MW_INFO, "CBR mode qp is not recommend to change\n");
 	}
 
 	ret = rts_av_set_h264_ctrl(pstm->h264_ctrl);
 	if (ret < 0) {
 		pstm->h264.err = RTS_CHN_E_SET_H264_FAIL;
-		RTS_ERR("Set h264 ctrl fail, ret[%d]\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "Set h264 ctrl fail, ret[%d]\n", ret);
 	}
 
 	__enable_chn(&pstm->h264);
@@ -1636,7 +1894,7 @@ int QCamVideoInput_SetBitrate(int channel, int bitrate, int isVBR)
 	if ((bitrate <= 0) || (bitrate > MAX_BITRATE))
 		goto exit;
 
-	if ((channel < 0) || (channel > STREAM_COUNT)
+	if ((channel < 0) || (channel >= (STREAM_COUNT - 2))
 			|| (vstream[channel].stat == RTS_STM_STAT_UNINIT))
 		goto exit;
 
@@ -1647,7 +1905,7 @@ int QCamVideoInput_SetBitrate(int channel, int bitrate, int isVBR)
 	return ret;
 
 exit:
-	RTS_ERR("[QCamVideoInput_SetBitrate] sanity check fail\n");
+	YSX_LOG(LOG_MW_ERROR, "[QCamVideoInput_SetBitrate] sanity check fail\n");
 	return -1;
 }
 
@@ -1661,7 +1919,7 @@ int QCamVideoInput_SetIFrame(int channel)
 	struct rts_middle_stream *pstm = NULL;
 	int ret = 0;
 
-	if ((channel < 0) || (channel > STREAM_COUNT)
+	if ((channel < 0) || (channel >= (STREAM_COUNT -2))
 			|| (vstream[channel].stat == RTS_STM_STAT_UNINIT))
 		goto exit;
 
@@ -1669,12 +1927,12 @@ int QCamVideoInput_SetIFrame(int channel)
 
 	 ret = rts_av_request_h264_key_frame(pstm->h264.id);
 	 if (ret < 0)
-		 RTS_ERR("Set I frame fail, ret[%d]\n", ret);
+		 YSX_LOG(LOG_MW_ERROR, "Set I frame fail, ret[%d]\n", ret);
 
 	 return ret;
 
 exit:
-	RTS_ERR("[QCamVideoInput_SetIFrame] sanity check fail\n");
+	YSX_LOG(LOG_MW_ERROR, "[QCamVideoInput_SetIFrame] sanity check fail\n");
 	return -1;
 }
 
@@ -1715,7 +1973,7 @@ static void __mjpeg_cb_func(void *priv, struct rts_av_profile *profile,
 	jpg_cb_d = (struct mjpeg_cb_data *)priv;
 
 	if ((buffer->bytesused) > *(jpg_cb_d->plen)) {
-		RTS_ERR("Mjpeg need a bigger buffer [%d] bytes\n",
+		YSX_LOG(LOG_MW_ERROR, "Mjpeg need a bigger buffer [%d] bytes\n",
 							buffer->bytesused);
 		jpg_cb_d->cb_ret = -1;
 		jpg_cb_d->cb_done = 1;
@@ -1728,18 +1986,163 @@ static void __mjpeg_cb_func(void *priv, struct rts_av_profile *profile,
 	jpg_cb_d->cb_done = 1;
 }
 
-/* catch main stream */
+static int __change_resolution(struct rts_middle_stream *pstm,
+						int width, int height)
+{
+	struct rts_av_profile profile;
+	int ret = 0;
+
+	ret = __disable_chn(&pstm->osd);
+	if (ret < 0)
+		goto exit;
+
+	ret = __disable_chn(&pstm->isp);
+	if (ret < 0)
+		goto exit;
+
+	ret = rts_av_get_profile(pstm->isp.id, &profile);
+	if (ret < 0) {
+		pstm->isp.err = RTS_CHN_E_GET_PROFILE_FAIL;
+		goto exit;
+	}
+
+	profile.video.width = width;
+	profile.video.height = height;
+
+	ret = rts_av_set_profile(pstm->isp.id, &profile);
+	if (ret < 0) {
+		pstm->isp.err = RTS_CHN_E_SET_PROFILE_FAIL;
+		goto exit;
+	}
+
+	pstm->isp.width = width;
+	pstm->isp.height = height;
+
+	ret = __enable_chn(&pstm->isp);
+	if (ret < 0)
+		goto exit;
+
+	ret = __enable_chn(&pstm->osd);
+	if (ret < 0)
+		goto exit;
+
+	YSX_LOG(LOG_MW_INFO, "Stream[%d] change resolution to [%dx%d]\n",
+						pstm->id, width, height);
+
+	return 0;
+exit:
+	YSX_LOG(LOG_MW_ERROR, "Stream[%d] change resolution fail, err[%d], ret[%d]\n",
+						pstm->id, pstm->isp.err, ret);
+	return -1;
+}
+
+int QCamJpeg_Init(unsigned int w, unsigned int h)
+{
+	int ret = 0;
+	int i;
+
+	if (!(((w == 1280) && (h == 720))
+			|| ((w == 720) && (h == 480))
+			|| ((w == 640) && (h == 360)))) {
+		YSX_LOG(LOG_MW_ERROR, "[QCamJpeg_Init] sanity check fail\n");
+		return -1;
+	}
+
+	jpg.stm_id = -1;
+	jpg.stm_exist = 0;
+
+	for (i = 0; i < (STREAM_COUNT - 1); i++) {
+		if ((vstream[i].stat == RTS_STM_STAT_OK)
+				&& (vstream[i].isp.width == w)
+				&& (vstream[i].isp.height == h)) {
+			jpg.stm_id = i;
+			jpg.stm_exist = 1;
+			break;
+		}
+        YSX_LOG(LOG_MW_TRACE, "%d, %d, %d\n", vstream[i].isp.width, vstream[i].isp.height, vstream[i].stat);
+	}
+
+	if (!jpg.stm_exist) {
+		if (!((w == 640) && (h == 360))) {
+			YSX_LOG(LOG_MW_ERROR, "Mjpeg only support 720p/480p/360p\n");
+			YSX_LOG(LOG_MW_ERROR, "Please confirm your resolution is ok\t");
+			YSX_LOG(LOG_MW_ERROR, "or if 720p/480p stream has already work\n");
+			goto exit;
+		} else {
+			pthread_mutex_t *pmutex = NULL;
+
+			jpg.stm_id = MULTIPLEX_STM_ID;
+			pmutex = &vstream[jpg.stm_id].osd.osd_info.tm.mutex;
+
+
+			/* multiplex stream resolution must has been changed
+			 * by capture yuv operation before*/
+
+			/* stop yuv capture
+			 * cause it may change multiplex stream resolution */
+			pthread_mutex_lock(&vstream[jpg.stm_id].mutex);
+
+			/* stop update osd time
+			 * cause we will stop stream right now*/
+			pthread_mutex_lock(pmutex);
+
+			ret = __change_resolution(&vstream[jpg.stm_id],
+								640, 360);
+
+			pthread_mutex_unlock(pmutex);
+
+			if (ret < 0)
+				goto exit;
+		}
+	}
+
+	ret = __enable_chn(&vstream[jpg.stm_id].jpg);
+	if (ret < 0)
+		goto exit;
+	ret = __set_jpg_ctrl(&vstream[jpg.stm_id]);
+	if (ret < 0)
+		goto exit;
+
+	return 0;
+
+exit:
+	if (jpg.stm_id == MULTIPLEX_STM_ID)
+		pthread_mutex_unlock(&vstream[jpg.stm_id].mutex);
+
+	YSX_LOG(LOG_MW_ERROR, "Init mjpeg snapshot fail\n");
+
+	return -1;
+}
+
+int QCamJpeg_Uninit()
+{
+	int ret = 0;
+
+	ret = __disable_chn(&(vstream[jpg.stm_id].jpg));
+
+	if (jpg.stm_id == MULTIPLEX_STM_ID)
+		pthread_mutex_unlock(&vstream[jpg.stm_id].mutex);
+	if (ret < 0)
+		goto exit;
+
+	return 0;
+
+exit:
+	YSX_LOG(LOG_MW_ERROR, "Uninit mjpeg snapshot fail\n");
+	return -1;
+}
+
+/* if QCamVideoInput_Start is not called before, then could not catch jpeg */
 int QCamVideoInput_CatchJpeg(char *buf, int *bufLen)
 {
 	struct rts_av_callback cb;
 	struct mjpeg_cb_data cb_d;
 	int ret = 0;
 
-	if (vstream[0].stat == RTS_STM_STAT_UNINIT) {
-		RTS_ERR("Main stream uninitial, catchjpeg fail\n");
+	if (vstream[jpg.stm_id].stat == RTS_STM_STAT_UNINIT) {
+		YSX_LOG(LOG_MW_ERROR, "Main stream uninitial, catchjpeg fail\n");
 		return -1;
 	}
-
 
 	cb.func = __mjpeg_cb_func;
 	cb.start = 0;
@@ -1752,50 +2155,18 @@ int QCamVideoInput_CatchJpeg(char *buf, int *bufLen)
 	cb_d.cb_done = 0;
 	cb.priv = &cb_d;
 
-	ret = rts_av_set_callback(vstream[MAIN_STREAM].jpg.id, &cb, 0);
+	ret = rts_av_set_callback(vstream[jpg.stm_id].jpg.id, &cb, 0);
 	if (ret < 0) {
-		RTS_ERR("Set mjpeg callback fail, ret = %d\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "Set mjpeg callback fail, ret = %d\n", ret);
 		return ret;
 	}
 
 	while (!cb_d.cb_done)
 		usleep(5000);
 
-	ret = cb_d.cb_done;
+	ret = cb_d.cb_ret;
 
 	return ret;
-}
-
-static int __create_yuv_stm(int width, int height)
-{
-	struct rts_m_isp_params isp_para;
-	int ret = 0;
-
-	isp_para.attr.isp_buf_num = YUV_CAPTURE_BUFS;
-	isp_para.attr.isp_id = YUV_CAPTURE_CHN;
-
-	isp_para.profile.fmt = RTS_V_FMT_YUV420SEMIPLANAR;
-	isp_para.profile.video.width = width;
-	isp_para.profile.video.height = height;
-	isp_para.profile.video.numerator = 1;
-	isp_para.profile.video.denominator = YUV_CAPTURE_FPS;
-
-	ret = __create_isp_chn(&vstream[YUV_CAPTURE_CHN], &isp_para);
-	if (ret < 0)
-		goto exit;
-
-	ret = __enable_chn(&vstream[YUV_CAPTURE_CHN].isp);
-	if (ret < 0)
-		goto exit;
-
-	vstream[YUV_CAPTURE_CHN].stat = RTS_STM_STAT_OK;
-	RTS_INFO("Create YUV stream success\n");
-
-	return 0;
-
-exit:
-	RTS_ERR("Create YUV stream fail\n");
-	return -1;
 }
 
 struct yuv_cb_data {
@@ -1821,7 +2192,7 @@ static void __yuv_cb_func(void *priv, struct rts_av_profile *profile,
 	else if ((product + product / 2) == yuv_cb_d->len)
 		memcpy(yuv_cb_d->pbuf, buffer->vm_addr, yuv_cb_d->len);
 	else {
-		RTS_ERR("[QCamVideoInput_CatchYUV] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamVideoInput_CatchYUV] sanity check fail\n");
 		yuv_cb_d->cb_done = 1;
 		yuv_cb_d->cb_ret = -1;
 		return;
@@ -1850,78 +2221,56 @@ static int __catch_yuv(int width, int height, char *buf, int buflen)
 	cb_d.cb_done = 0;
 	cb.priv = &cb_d;
 
-	ret = rts_av_set_callback(vstream[YUV_CAPTURE_CHN].isp.id, &cb, 0);
+	ret = rts_av_set_callback(vstream[MULTIPLEX_STM_ID].isp.id, &cb, 0);
 	if (ret < 0) {
-		RTS_ERR("Set yuv callback fail, ret = %d\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "Set yuv callback fail, ret = %d\n", ret);
 		return ret;
 	}
 
 	while (!cb_d.cb_done)
 		usleep(5000);
 
-	ret = cb_d.cb_done;
+	ret = cb_d.cb_ret;
 
 	return ret;
 }
 
-static int __change_resolution(Mchannel *pchn, int width, int height)
-{
-	struct rts_av_profile profile;
-	int ret = 0;
-
-	ret = __disable_chn(&vstream[YUV_CAPTURE_CHN].isp);
-	if (ret < 0)
-		goto exit;
-
-	ret = rts_av_get_profile(vstream[YUV_CAPTURE_CHN].isp.id, &profile);
-	if (ret < 0) {
-		vstream[YUV_CAPTURE_CHN].isp.err = RTS_CHN_E_GET_PROFILE_FAIL;
-		goto exit;
-	}
-
-	profile.video.width = width;
-	profile.video.height = height;
-
-	ret = rts_av_set_profile(vstream[YUV_CAPTURE_CHN].isp.id, &profile);
-	if (ret < 0) {
-		vstream[YUV_CAPTURE_CHN].isp.err = RTS_CHN_E_SET_PROFILE_FAIL;
-		goto exit;
-	}
-
-	vstream[YUV_CAPTURE_CHN].isp.width = width;
-	vstream[YUV_CAPTURE_CHN].isp.height = height;
-
-	ret = __enable_chn(&vstream[YUV_CAPTURE_CHN].isp);
-	if (ret < 0)
-		goto exit;
-
-	RTS_INFO("YUV stream change resolution to [%dx%d]\n", width, height);
-
-	return 0;
-exit:
-	RTS_ERR("Change resolution fail, err[%d], ret[%d]\n",
-				vstream[YUV_CAPTURE_CHN].isp.err, ret);
-	return -1;
-}
-
+/* TODO create/destroy yuv stream every time call this api */
 int QCamVideoInput_CatchYUV(int w, int h, char *buf, int bufLen)
 {
 	int ret = 0;
 
-	if (vstream[YUV_CAPTURE_CHN].stat == RTS_STM_STAT_UNINIT) {
-		ret = __create_yuv_stm(w, h);
+	pthread_mutex_lock(&vstream[MULTIPLEX_STM_ID].mutex);
+
+	if ((vstream[MULTIPLEX_STM_ID].isp.width != w)
+			|| (vstream[MULTIPLEX_STM_ID].isp.height != h)) {
+		pthread_mutex_t *pmutex = NULL;
+
+		pmutex = &vstream[MULTIPLEX_STM_ID].osd.osd_info.tm.mutex;
+
+		pthread_mutex_lock(pmutex);
+
+		ret = __change_resolution(&vstream[MULTIPLEX_STM_ID], w, h);
+
+		pthread_mutex_unlock(pmutex);
 		if (ret < 0)
-			return -1;
+			goto exit;
 	}
 
-	if ((vstream[YUV_CAPTURE_CHN].isp.width != w)
-			|| (vstream[YUV_CAPTURE_CHN].isp.height != h)) {
-		ret = __change_resolution(&vstream[YUV_CAPTURE_CHN].isp, w, h);
-		if (ret < 0)
-			return -1;
-	}
+	ret = __catch_yuv(w, h, buf, bufLen);
+	if (ret < 0)
+		goto exit;
 
-	return __catch_yuv(w, h, buf, bufLen);
+	pthread_mutex_unlock(&vstream[MULTIPLEX_STM_ID].mutex);
+
+	return 0;
+
+exit:
+	pthread_mutex_unlock(&vstream[MULTIPLEX_STM_ID].mutex);
+
+	YSX_LOG(LOG_MW_ERROR, "Capture yuv fail\n");
+
+	return -1;
 }
 
 /* TODO what if hw photosensitivity is not support,
@@ -1949,7 +2298,7 @@ int QCamVideoInput_HasLight()
 void QCamSetIRMode(QCAM_IR_MODE mode)
 {
 	if ((mode < -1) || (mode > 2)) {
-		RTS_ERR("[QCamSetIRMode] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamSetIRMode] sanity check fail\n");
 		return;
 	}
 
@@ -1984,7 +2333,7 @@ int QCamVideoInput_SetQualityLvl(int channel, int low_enable)
 	if (low_enable < 0)
 		goto exit;
 
-	if ((channel < 0) || (channel > STREAM_COUNT)
+	if ((channel < 0) || (channel >= (STREAM_COUNT - 2))
 			|| (vstream[channel].stat == RTS_STM_STAT_UNINIT))
 		goto exit;
 
@@ -1995,7 +2344,84 @@ int QCamVideoInput_SetQualityLvl(int channel, int low_enable)
 	return ret;
 
 exit:
-	RTS_ERR("[QCamVideoInput_SetQualityLvl] sanity check fail\n");
+	YSX_LOG(LOG_MW_ERROR, "[QCamVideoInput_SetQualityLvl] sanity check fail\n");
 	return -1;
 }
 
+/* 0:disable, 1:enable */
+static int __enable_md(int enable)
+{
+	int ret = 0;
+
+	if (md_attr == NULL) {
+		YSX_LOG(LOG_MW_ERROR, "MD attr has not been queryed\n");
+		return -1;
+	}
+
+	md_attr->blocks->enable = enable;
+
+	ret = rts_av_set_isp_md(md_attr);
+	if (ret < 0) {
+		if (enable)
+			YSX_LOG(LOG_MW_ERROR, "Enable md failed, ret[%d]\n", ret);
+		else
+			YSX_LOG(LOG_MW_ERROR, "Disable md failed, ret[%d]\n", ret);
+	}
+
+	return ret;
+}
+
+void *__md_thread(void *arg)
+{
+	int status = 0;
+	Ysx_ShadeDetect_cb __cb = arg;
+
+	while (!md.exit) {
+		status = rts_av_check_isp_md_status(md_attr, 0);
+		if (status)
+			__cb(status);
+		usleep(100000);
+	}
+
+	return NULL;
+}
+
+/* day/night/low light is processed by fw */
+void Ysx_InitShadeDetect(void(*cb)(int shade))
+{
+	int ret = 0;
+
+	if (cb == NULL) {
+		YSX_LOG(LOG_MW_ERROR, "[Ysx_InitShadeDetect] sanity check fail\n");
+		return;
+	}
+
+	if ((md_attr == NULL) || (md_attr->blocks == NULL)) {
+		YSX_LOG(LOG_MW_ERROR, "Md attr has not been queryed\n");
+		return;
+	}
+
+	ret = __enable_md(1);
+	if (ret < 0)
+		return;
+
+	md.exit = 0;
+	md.t_stat = false;
+	ret = pthread_create(&md.tid, NULL, __md_thread, cb);
+	if (ret < 0) {
+		YSX_LOG(LOG_MW_ERROR, "Create md thread fail\n");
+		return;
+	}
+	md.t_stat = true;
+}
+
+void Ysx_UninitShadeDetect(void)
+{
+	 __enable_md(0);
+
+	if (md.t_stat == true) {
+		md.exit = 1;
+		pthread_join(md.tid, NULL);
+		md.t_stat = false;
+	}
+}

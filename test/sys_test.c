@@ -86,20 +86,20 @@ int main(int argc, char *argv[])
 
 	if (o_led) {
 		printf("Test LED MODE change.\n");
-		QCamLedSet(LED_MODE_BLUE, 1);
-		QCamLedSet(LED_MODE_YELLOW, 0);
+		QCamLedSet(LED_MODE_BLUE, 1, 100);
+		QCamLedSet(LED_MODE_GREEN, 0, 100);
 		sleep(5);
 
-		QCamLedSet(LED_MODE_BLUE, 0);
-		QCamLedSet(LED_MODE_YELLOW, 1);
+		QCamLedSet(LED_MODE_BLUE, 0, 100);
+		QCamLedSet(LED_MODE_GREEN, 1, 100);
 		sleep(5);
 
-		QCamLedSet(LED_MODE_BLUE, 2);
-		QCamLedSet(LED_MODE_YELLOW, 0);
+		QCamLedSet(LED_MODE_BLUE, 2, 100);
+		QCamLedSet(LED_MODE_GREEN, 0, 100);
 		sleep(5);
 
-		QCamLedSet(LED_MODE_BLUE, 0);
-		QCamLedSet(LED_MODE_YELLOW, 2);
+		QCamLedSet(LED_MODE_BLUE, 0, 100);
+		QCamLedSet(LED_MODE_GREEN, 2, 100);
 		sleep(5);
 	}
 

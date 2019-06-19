@@ -13,23 +13,16 @@
 #include <rtsisp.h>
 #include <rtsamixer.h>
 #include <rtsaudio.h>
+#include <rts_io_gpio.h>
 
 #include <qcam_audio_input.h>
 #include <qcam_audio_output.h>
 
 #include "rts_middle_media.h"
 
-#define DFT_AD_CHANNELS 1
-#define DFT_AD_BITFMT 16
-#define DFT_AD_RATE_8K 8000
-#define DFT_AD_PERIOD_TM 20 /* 20 ms */
 
-#define DFT_AUDIO_PLY_DGAIN 85	/* actual = 85 * 1.27, max = 127 */
-#define DFT_AUDIO_CAP_DGAIN 90	/* actual = 90 * 1.27, max = 127 */
-
-#define AUDIO_DEVICE0 "hw:0,0"
-#define AUDIO_DEVICE1 "hw:0,1"
 struct audio_server audio_svr;
+struct rts_m_spk_gpio spk_gpio;
 
 
 static int __create_audio_chn(Mchannel *pchn,
@@ -87,12 +80,12 @@ static int __create_audio_chn(Mchannel *pchn,
 		pchn->channels = attr->channels;
 	}
 
-	RTS_INFO("Create audio[type:%d] chn success\n", pchn->type);
+	YSX_LOG(LOG_MW_INFO, "Create audio[type:%d] chn success\n", pchn->type);
 
 	return 0;
 
 exit:
-	RTS_ERR("Create audio[type:%d] chn fail, err[%d], ret[%d]\n",
+	YSX_LOG(LOG_MW_ERROR, "Create audio[type:%d] chn fail, err[%d], ret[%d]\n",
 						pchn->type, pchn->err, ret);
 	pchn->stat = RTS_CHN_STAT_FAIL;
 	return -1;
@@ -114,7 +107,7 @@ static int __init_audio_in(struct rts_audio_attr *attr)
 	return 0;
 
 exit:
-	RTS_ERR("Create audio input channel fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Create audio input channel fail\n");
 	return -1;
 }
 
@@ -154,7 +147,7 @@ static int __init_audio_out(struct rts_audio_attr *attr)
 	if (suc)
 		return 0;
 
-	RTS_ERR("Create audio output channel list fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Create audio output channel list fail\n");
 	return -1;
 }
 
@@ -173,7 +166,7 @@ static int __init_ai_device(void)
 	int ret = 0;
 
 	if (!CHN_UNINIT(audio_svr.ai)) {
-		RTS_INFO("Audio input channel already init\n");
+		YSX_LOG(LOG_MW_INFO, "Audio input channel already init\n");
 		return 0;
 	}
 
@@ -190,7 +183,7 @@ static int __init_ai_device(void)
 	return 0;
 
 exit:
-	RTS_ERR("Init audio input device fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Init audio input device fail\n");
 	return -1;
 }
 
@@ -199,7 +192,7 @@ static int __init_ao_device(void)
 	int ret = 0;
 
 	if (audio_svr.pao && (!CHN_UNINIT(*audio_svr.pao))) {
-		RTS_INFO("Audio input channel already init\n");
+		YSX_LOG(LOG_MW_INFO, "Audio input channel already init\n");
 		return 0;
 	}
 
@@ -248,12 +241,12 @@ static int __init_aec_module(void)
 		return 0;
 
 	if (!CHN_UNINIT(audio_svr.aec)) {
-		RTS_INFO("Audio aec module already init\n");
+		YSX_LOG(LOG_MW_INFO, "Audio aec module already init\n");
 		return 0;
 	}
 
 	if (!CHN_OK(audio_svr.ao) || !CHN_OK(audio_svr.ai)) {
-		RTS_ERR("Start ai ao before enable aec\n");
+		YSX_LOG(LOG_MW_ERROR, "Start ai ao before enable aec\n");
 		return -1;
 	}
 
@@ -298,7 +291,7 @@ static int __init_aec_module(void)
 
 		return 0;
 	} else {
-		RTS_ERR("AEC module init failed\n");
+		YSX_LOG(LOG_MW_ERROR, "AEC module init failed\n");
 
 		__unbind_chn(&audio_svr.ai, &audio_svr.aec);
 		__unbind_chn(&audio_svr.ao, &audio_svr.ptoa_resample);
@@ -344,7 +337,7 @@ static int __enable_audio_all_chn(void)
 	} while (0);
 
 	if (!suc) {
-		RTS_ERR("Enable audio all channels fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Enable audio all channels fail\n");
 		return -1;
 	}
 
@@ -378,7 +371,7 @@ static int __set_aec_denoise(int chn, int aec, int denoise)
 	return 0;
 
 exit:
-	RTS_ERR("Set aec denoise fail, ret[%d]\n", ret);
+	YSX_LOG(LOG_MW_ERROR, "Set aec denoise fail, ret[%d]\n", ret);
 	return ret;
 }
 
@@ -444,13 +437,13 @@ void __init_audio_server(void)
 
 	ret = rts_audio_set_capture_volume(DFT_AD_CAP_DGAIN);
 	if (ret != RTS_OK)
-		RTS_ERR("set capture volume fail [ret:%d]\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "set capture volume fail [ret:%d]\n", ret);
 
 	ret = rts_audio_set_playback_volume(DFT_AD_PLY_DGAIN);
 	if (ret != RTS_OK)
-		RTS_ERR("set capture volume fail [ret:%d]\n", ret);
+		YSX_LOG(LOG_MW_ERROR, "set capture volume fail [ret:%d]\n", ret);
 
-	RTS_INFO("RTS INIT MIDDLE AUDIO\n");
+	YSX_LOG(LOG_MW_INFO, "RTS INIT MIDDLE AUDIO\n");
 }
 
 /*static void __attribute__((destructor(AUDIO_INIT_NO + 1))) */
@@ -494,7 +487,7 @@ void __release_audio_server(void)
 	__destroy_chn(&audio_svr.enc_alaw);
 	__destroy_chn(&audio_svr.enc_aac);
 
-	RTS_INFO("RTS RELEASE MIDDLE AUDIO\n");
+	YSX_LOG(LOG_MW_INFO, "RTS RELEASE MIDDLE AUDIO\n");
 }
 
 static int __audio_input_open_sanity_check(QCamAudioInputAttr_aec *pAttr)
@@ -518,7 +511,7 @@ static int __audio_input_open_sanity_check(QCamAudioInputAttr_aec *pAttr)
 	return 0;
 
 exit:
-	RTS_ERR("[QCamAudioInputOpen_ysx] sanity check fail\n");
+	YSX_LOG(LOG_MW_ERROR, "[QCamAudioInputOpen_ysx] sanity check fail\n");
 	return -1;
 }
 
@@ -534,13 +527,13 @@ static int __set_audio_volume(int volume, int dir)
 	if (!dir) {
 		ret = rts_audio_set_capture_volume(vol);
 		if (ret < 0) {
-			RTS_ERR("Set audio capture volume fail\n");
+			YSX_LOG(LOG_MW_ERROR, "Set audio capture volume fail\n");
 			return -1;
 		}
 	} else {
 		ret = rts_audio_set_playback_volume(vol);
 		if (ret < 0) {
-			RTS_ERR("Set audio playback volume fail\n");
+			YSX_LOG(LOG_MW_ERROR, "Set audio playback volume fail\n");
 			return -1;
 		}
 	}
@@ -577,7 +570,7 @@ int QCamAudioInputOpen_ysx(QCamAudioInputAttr_aec *pAttr)
 		ret = pthread_create(&audio_svr.t_capture, NULL,
 							__audio_capture, NULL);
 		if (ret) {
-			RTS_ERR("could not create audio capture thread\n");
+			YSX_LOG(LOG_MW_ERROR, "could not create audio capture thread\n");
 			goto exit;
 		}
 	}
@@ -587,7 +580,7 @@ int QCamAudioInputOpen_ysx(QCamAudioInputAttr_aec *pAttr)
 	return 0;
 
 exit:
-	RTS_ERR("Open audio input fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Open audio input fail\n");
 	return -1;
 }
 
@@ -624,7 +617,7 @@ int QCamAudioInputSetVolume(int vol)
 	int ret = 0;
 
 	if ((vol < -1) || (vol > 100)) {
-		RTS_ERR("[QCamAudioInputSetVolume] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamAudioInputSetVolume] sanity check fail\n");
 		goto exit;
 	}
 
@@ -655,13 +648,13 @@ void QCamAudioInputSetGain(int gain)
 	char cmd[64] = {'\0'};
 
 	if ((gain < 0) || (gain > 69)) {
-		RTS_ERR("[QCamAudioInputSetGain] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamAudioInputSetGain] sanity check fail\n");
 		return;
 	}
 
 	ret = access("/bin/amixer", F_OK);
 	if (ret < 0) {
-		RTS_ERR("Could not found tool[amixer]\n");
+		YSX_LOG(LOG_MW_ERROR, "Could not found tool[amixer]\n");
 		return;
 	}
 
@@ -670,6 +663,92 @@ void QCamAudioInputSetGain(int gain)
 	system(cmd);
 }
 
+static void __get_spk_gpio(void)
+{
+	int ret = 0;
+
+	spk_gpio.io = rts_io_gpio_request(SYSTEM_GPIO, GPIO_SPK);
+	if (spk_gpio.io == NULL)
+		goto exit;
+
+	ret |= rts_io_gpio_set_direction(spk_gpio.io, GPIO_OUTPUT);
+	ret |= rts_io_gpio_set_value(spk_gpio.io, GPIO_SPK_HIGH);
+	if (ret < 0)
+		goto exit;
+
+	audio_svr.amp_stat = true;
+
+	return;
+
+exit:
+	YSX_LOG(LOG_MW_ERROR, "SPK gpio pull high fail, spkeaker will be mute\n");
+}
+
+static void __free_spk_gpio(void)
+{
+	int ret = 0;
+
+	if (spk_gpio.io != NULL) {
+		rts_io_gpio_set_value(spk_gpio.io, GPIO_SPK_LOW);
+		audio_svr.amp_stat = false;
+		ret = rts_io_gpio_free(spk_gpio.io);
+	}
+	if (ret < 0)
+		YSX_LOG(LOG_MW_ERROR, "Free speaker gpio fail\n");
+	else
+		spk_gpio.io = NULL;
+}
+
+static void __wait_for_ao_idle(void)
+{
+	int count = 0;
+
+	if (!CHN_RUN(*audio_svr.pao))
+		return;
+
+	while (count < 10) {
+		if (rts_av_is_idle(audio_svr.ao.id))
+			count++;
+		else
+			count = 0;
+		usleep(10000);
+	}
+}
+
+static void __enable_amp_ex(bool enable)
+{
+	if ((spk_gpio.io != NULL) && (audio_svr.amp_stat != enable)) {
+		rts_io_gpio_set_value(spk_gpio.io, enable ? GPIO_SPK_HIGH : GPIO_SPK_LOW);
+		audio_svr.amp_stat = enable;
+	}
+}
+
+static void __enable_amp(void)
+{
+	__enable_amp_ex(true);
+}
+
+static void __disable_amp(void)
+{
+	__enable_amp_ex(false);
+}
+
+static void *__amp_observer(void *arg)
+{
+	while (!audio_svr.amp_exit) {
+		while (audio_svr.ao_idle_cnt < 10) {
+			audio_svr.ao_idle_cnt++;
+			usleep(100000);
+		}
+		audio_svr.ao_idle_cnt = 0;
+
+		__wait_for_ao_idle();
+
+		__disable_amp();
+	}
+
+	return NULL;
+ }
 
 int QCamAudioOutputOpen(QCamAudioOutputAttribute *pAttr)
 {
@@ -691,10 +770,22 @@ int QCamAudioOutputOpen(QCamAudioOutputAttribute *pAttr)
 	 if (ret < 0)
 		 goto exit;
 
+	__get_spk_gpio();
+
+	if (!audio_svr.t_amp_stat) {
+		ret = pthread_create(&audio_svr.t_amp, NULL,
+							__amp_observer, NULL);
+		if (ret) {
+			RTS_ERR("could not create amplify observer thread\n");
+			goto exit;
+		}
+		audio_svr.t_amp_stat = true;
+	}
+
 	 return 0;
 
 exit:
-	 RTS_ERR("Open audio output fail\n");
+	 YSX_LOG(LOG_MW_ERROR, "Open audio output fail\n");
 	 return -1;
 }
 
@@ -705,7 +796,7 @@ int QCamAudioOutputQueryBuffer(QCamAudioOutputBufferStatus *pStat)
 	int bytes_1s = 0;
 
 	if (pStat == NULL) {
-		RTS_ERR("[QCamAudioOutputQueryBuffer] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamAudioOutputQueryBuffer] sanity check fail\n");
 		goto exit;
 	}
 
@@ -725,19 +816,14 @@ exit:
 
 int QCamAudioOutputClose()
 {
-	int count = 0;
 	int ret = 0;
 
-	if (!CHN_RUN(*audio_svr.pao))
-		return 0;
-
-	while (count < 30) {
-		if (rts_av_is_idle(audio_svr.ao.id))
-			count++;
-		else
-			count = 0;
-		usleep(10000);
-	}
+	if (audio_svr.t_amp_stat) {
+		audio_svr.amp_exit = 1;
+		pthread_join(audio_svr.t_amp, NULL);
+		audio_svr.t_amp_stat = false;
+ 	}
+	__free_spk_gpio();
 
 	ret = __stop_chn(audio_svr.pao, RTS_SEND);
 	if (ret < 0)
@@ -750,7 +836,7 @@ int QCamAudioOutputClose()
 	return 0;
 
 exit:
-	RTS_ERR("Close audio output fail\n");
+	YSX_LOG(LOG_MW_ERROR, "Close audio output fail\n");
 	return -1;
 
 }
@@ -773,14 +859,17 @@ int QCamAudioOutputPlay_ysx(char *pcm_data, int len)
 	int sent = 0;
 	int ret = 0;
 
+	audio_svr.ao_idle_cnt = 0;
+	__enable_amp();
+
 	if ((pcm_data == NULL) || (len <= 0)) {
-		RTS_ERR("[QCamAudioOutputPlay_ysx] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamAudioOutputPlay_ysx] sanity check fail\n");
 		return -1;
 	}
 
 	buf = rts_av_new_buffer(len);
 	if (buf == NULL) {
-		RTS_ERR("Malloc rts buffer fail\n");
+		YSX_LOG(LOG_MW_ERROR, "Malloc rts buffer fail\n");
 		return -1;
 	}
 
@@ -820,7 +909,7 @@ int QCamAudioOutputPlay_ysx(char *pcm_data, int len)
 	if (sent)
 		return 0;
 
-	RTS_ERR("Audio playback send fail, ret[%d]\n", ret);
+	YSX_LOG(LOG_MW_ERROR, "Audio playback send fail, ret[%d]\n", ret);
 	return ret;
 }
 
@@ -829,7 +918,7 @@ int QCamAudioOutputSetVolume(int vol)
 	int ret = 0;
 
 	if ((vol < -1) || (vol > 100)) {
-		RTS_ERR("[QCamAudioOutputSetVolume] sanity check fail\n");
+		YSX_LOG(LOG_MW_ERROR, "[QCamAudioOutputSetVolume] sanity check fail\n");
 		goto exit;
 	}
 

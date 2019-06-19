@@ -1,0 +1,9 @@
+#
+# Realtek Semiconductor Corp.
+#
+## Steve Liu (steve_liu@realsil.com.cn)
+# Dec. 11, 2018
+# modified by echo, 2019-05-16 16:07:45
+
+pkg_$(CONFIG_PACKAGE_test) += ysx/middle_ware/ysx_middle/test
+

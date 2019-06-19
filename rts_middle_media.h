@@ -1,10 +1,16 @@
 #ifndef __RTS_MIDDLE_MEDIA_H
 #define __RTS_MIDDLE_MEDIA_H
 
+#include <linux/types.h>
 #include <stdbool.h>
 #include <rtsavapi.h>
 #include <qcam_video_input.h>
 #include <qcam_audio_input.h>
+#ifndef YSX_MID_DBG_MSG
+#define YSX_LOG(level, fmt...)
+#else
+#include "ysx_debug.h"
+#endif
 
 #define AV_INIT_NO 115 /* attribute constructor must bigger than 112*/
 #define AUDIO_INIT_NO 116 /* attribute constructor must bigger than 112*/
@@ -15,11 +21,9 @@
 #define CHN_ERR(x) ((&(x))->err)
 
 /*********** video ***********/
-#define MAIN_STREAM 0
-#define STREAM_COUNT 4 /* stream 0,1,2 h264 stream; stream 3 isp stream*/
-#define YUV_CAPTURE_CHN 3
-#define YUV_CAPTURE_BUFS 2
-#define YUV_CAPTURE_FPS 10
+#define STREAM_COUNT 4 /* stream 0,1,2 h264 stream; stream 3 isp stream */
+#define MULTIPLEX_STM_ID 2
+#define MULTIPLEX_STM_FPS 5
 #define MAX_FPS 30
 #define MAX_BITRATE 5000
 #define QP_CBR_DEFAULT 45
@@ -31,16 +35,17 @@
 #define MJPEG_COMPRESS_RATE 15
 
 
-#define GPIO_IR_CUT 10
-#define GPIO_IR_LED 16
-#define GPIO_IR_CUT_DAY 0
-#define GPIO_IR_CUT_NIGHT 1
+#define GPIO_IR_CUT_0 20
+#define GPIO_IR_CUT_1 21
+#define GPIO_IR_LED 17
+#define GPIO_IR_CUT_LOW 0
+#define GPIO_IR_CUT_HIGH 1
 #define GPIO_IR_LED_DAY 0
 #define GPIO_IR_LED_NIGHT 1
 #define ADC_CHN 0 /*TODO*/
 #define ADC_FACTOR 128
 #define ADC_DAY_THR 600 /*TODO adjust this value*/
-#define ADC_NIGHT_THR 400 /*TODO adjust this value*/
+#define ADC_NIGHT_THR 300 /*TODO adjust this value*/
 
 #define OSD_TM_CHAR_LIB_FILE_PREFIX "/usr/osd_char_lib" /* TODO */
 #define TM_PICT_HEIGHT 16
@@ -56,6 +61,18 @@
 #define OSD_PICT_WIDTH 640
 #define OSD_PICT_HEIGHT 480
 #define OSD_PICT_BLKIDX 2
+
+#define CELL_W 8
+#define CELL_H 8
+#define MD_4x3_WIDTH 640
+#define MD_4x3_HEIGHT 480
+#define MD_SENSITIVITY 50
+#define MD_PERCENTAGE 90
+#define MD_FRAME_INTERVAL 5
+#define MD_START_X 0
+#define MD_START_Y 0
+#define MD_AREA_COL 80
+#define MD_AREA_ROW 60
 
 enum ysx_bitrate_mode {
 	YSX_BITRATE_MODE_CBR = 0,
@@ -114,7 +131,10 @@ enum channel_type {
 	RTS_MIDDLE_AUDIO_CHN_DECODE,
 	RTS_MIDDLE_AUDIO_CHN_MIXER,
 
-	RTS_MIDDLE_VIDEO_CHN,
+	RTS_MIDDLE_VIDEO_CHN_ISP,
+	RTS_MIDDLE_VIDEO_CHN_OSD,
+	RTS_MIDDLE_VIDEO_CHN_H264,
+	RTS_MIDDLE_VIDEO_CHN_MJPEG,
 };
 
 /* OSD */
@@ -164,6 +184,11 @@ struct rts_m_osd2_common {
 	struct osd_m_tid osd_tid;
 };
 
+struct rts_m_jpg {
+	int stm_id;
+	int stm_exist;
+};
+
 typedef struct Mchannel {
 	/* common */
 	int id; /* rts channelid */
@@ -182,12 +207,19 @@ typedef struct Mchannel {
 	int channels;
 }Mchannel;
 
+struct rts_m_pthreadpool {
+	pthread_t *tid;
+	int pool_size;
+	int current_size;
+};
+
 struct rts_middle_stream {
 	int id; /* ysx channelid(streamid) */
 	Mchannel isp, osd, h264, jpg;
 	int stat;
 	int exit;
 	pthread_mutex_t mutex;
+	int has_h264;
 	struct rts_video_h264_ctrl *h264_ctrl;
 	struct rts_video_mjpeg_ctrl *mjpeg_ctrl;
 	struct rts_video_osd2_attr *osd_attr;
@@ -214,6 +246,12 @@ struct mjpeg_cb_data {
 	int cb_done;
 };
 
+struct rts_m_md {
+	int exit;
+	pthread_t tid;
+	bool t_stat;
+};
+
 enum rts_m_ir_stat {
 	UNKNOWN = -1,
 	NIGHT = 0,
@@ -233,7 +271,6 @@ struct ir_m_tid {
 struct rts_m_ir {
 	enum rts_m_ir_stat ir_stat;
 	QCAM_IR_MODE ir_mode;
-	struct rts_gpio *gpio_ir_cut;
 	struct rts_gpio *gpio_ir_led;
 	struct ir_m_tid ir_tid;
 	int auto_ir_exit;
@@ -247,7 +284,7 @@ struct rts_m_ir {
 #define DFT_AD_IN_CHANNELS 1
 #define DFT_AD_IN_BITFMT 16
 #define DFT_AD_IN_RATE_8K 8000
-#define DFT_AD_IN_PERIOD_TM 20 /* 20 ms */
+#define DFT_AD_IN_PERIOD_TM 64 /* 64 ms */
 #define DFT_AD_OUT_CHANNELS 1
 #define DFT_AD_OUT_BITFMT 16
 #define DFT_AD_OUT_RATE_8K 8000
@@ -256,8 +293,12 @@ struct rts_m_ir {
 #define AD_PLY_CACHE_BUFS 10 /* 200 ms if AD_PLY_BUF_LEN == 320*/
 #define AD_PLY_BUF_LEN 320
 
-#define DFT_AD_PLY_DGAIN 85	/* actual = 85 * 1.27, max = 127 */
-#define DFT_AD_CAP_DGAIN 90	/* actual = 90 * 1.27, max = 127 */
+#define DFT_AD_PLY_DGAIN 93	/* actual = 85 * 1.27, max = 127 */
+#define DFT_AD_CAP_DGAIN 97	/* actual = 90 * 1.27, max = 127 */
+
+#define GPIO_SPK 18 /* pull gpio_18 high before audio playback */
+#define GPIO_SPK_LOW 0
+#define GPIO_SPK_HIGH 1
 
 #define AUDIO_DEVICE0 "hw:0,0"
 #define AUDIO_DEVICE1 "hw:0,1"
@@ -270,11 +311,21 @@ struct audio_server {
 	int capture_exit;
 	int capture_start;
 	int capture_run;
+	int amp_exit;
+	int ao_idle_cnt;
+	bool amp_stat;
 	Mchannel *pai, *pao;
 	pthread_mutex_t m_capture;
 	pthread_t t_capture;
+	pthread_t t_amp;
+	bool t_capture_stat;
+	bool t_amp_stat;
 	QCamAudioInputCallback_aec aec_cb;
 	int svr_init;
+};
+
+struct rts_m_spk_gpio {
+	struct rts_gpio *io;
 };
 /*********** audio ***********/
 
@@ -283,20 +334,31 @@ struct audio_server {
 #define KEY_NUM 3
 #define LED_NUM 2
 
-#define BLINK_DUTY 200000 /* time: xx us */
+#define PWM_SETTING                                 "/sys/devices/platform/pwm_platform/settings/pwm" /* TODO */
+#define BLINK_PERIOD                                1000000000//100000000 /* 100ms max: 1s min 200us*/
 enum led_color {
 	LED_YELLOW = 0,
 	LED_BLUE,
 };
 
-/* TODO system gpio? io number? */
-enum led_gpio {
-	GPIO_LED_YELLOW = 9,
-	GPIO_LED_BLUE = 11,
+enum pwm_request {
+	PWM_FREE = 0,
+	PWM_REQUEST = 1,
+};
+
+enum pwm_enable {
+	PWM_DISABLE = 0,
+	PWM_ENABLE = 1,
+};
+
+/* TODO pwm channel */
+enum led_pwm {
+	PWM_LED_YELLOW = 3,
+	PWM_LED_BLUE = 1,
 };
 
 struct led {
-	struct rts_gpio *gpio;
+	int pwm;
 	int blink;
 };
 
@@ -308,6 +370,69 @@ struct button_tid {
 struct led_tid {
 	pthread_t tid;
 	bool stat;
+};
+
+/* hconf partition:
+ * size: 256kBytes
+ * ota_flag_offset: 255kBytes
+ */
+#define HCONF_PARTITION		"/dev/mtd7"
+#define OTA_FLAG_OFFSET		0x3fc00
+#define HCONF_MSG_MAX_LEN		1024
+
+#define NEU_HEADER_LEN				256
+#define NEU_CHECKSUM_ALIGN			0x100000000
+#define MTD_MAGIC_FEOF				0x46454f46
+#define MTD_DEV_OPS_UNIT			0x10000
+#define READ_UNIT_SIZE				0x10000
+#define FLASH_SIZE				(16 * 1024 * 1024) /*TODO*/
+
+#define UPDATE_TIME 60
+
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+
+struct wdt_m_para {
+	int fd;
+	int livetime;
+};
+
+struct section_head {
+	__u32 magic;
+	__u32 reserved1;
+	__u64 reserved2;
+	__u64 burnaddr;
+	__u64 burnlen;
+} __attribute__((packed));
+
+struct section_tail {
+	__u32 checksum;
+} __attribute__((packed));
+
+enum neu_status {
+	NEU_STAT_PREPARE,
+	NEU_STAT_CHECKING,
+	NEU_STAT_BURNING,
+	NEU_STAT_SUCCESS,
+	NEU_STAT_FAILED = -1,
+};
+
+struct neu_data;
+struct neu_cache {
+	unsigned char data[READ_UNIT_SIZE];
+	struct section_head head;
+	char __head[sizeof(struct section_head)];
+	struct section_tail tail;
+	char __tail[sizeof(struct section_tail)];
+	int (*flush)(struct neu_data *data, int fd);
+};
+
+struct neu_data {
+	const char *filename;
+	int burn_size;
+	int burn_status;
+	struct neu_cache *cache;
 };
 /*********** sys *************/
 
@@ -326,7 +451,4 @@ void __release_audio_server(void);
 
 void __init_sys_daemon(void);
 void __release_sys_daemon(void);
-
-void __init_middleware_context(void);
-void __release_middleware_context(void);
 #endif

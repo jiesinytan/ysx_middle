@@ -1,0 +1,16 @@
+三个测试sample开启基本功能：
+1.video_test:
+	./video_test -c [0,1,2] 开启对应第几路流，并且dump出数据到out.h264.其他的参数设置不设的话使用
+	默认参数，-b默认是kbit，-b 1024即1Mbit；其他的看-h应该能明白
+
+2.audio_test:
+	./audio_test -t -i （-t开启默认参数进行capture，并将capture的数据保存到a.pcm）
+	./audio_test -t -o （-t默认参数进行playbak，播放当前文件下的b.pcm）
+	不加-t请自行设置相应的音频参数；其他的
+	
+3.sys_test:
+	这个看参数就了解了
+
+这几个sample是我们自己测的时候用的，所以基本以满足功能测试为主，没考虑其他方面
+
+

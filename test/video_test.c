@@ -13,11 +13,11 @@
 QCamVideoInputChannel chn;
 QCamVideoInputChannel stream[STREAM_COUNT];
 QCamVideoInputChannel chn_default = {
-	.channelId = 0,				/*MAIN_STREAM*/
+	.channelId = 0,			/*MAIN_STREAM*/
 	.res = QCAM_VIDEO_RES_720P,	/*resolution*/
-	.fps = 15,				/*fps*/
-	.bitrate = 1024,				/*h264 bitrate (kbps)*/
-	.gop = 1,				/*interval I frame(s)*/
+	.fps = 15,			/*fps*/
+	.bitrate = 1024,		/*h264 bitrate (kbps)*/
+	.gop = 1,			/*interval I frame(s)*/
 	.vbr = YSX_BITRATE_MODE_CBR,	/*VBR=1, CBR=0*/
 	.cb = NULL
 };
@@ -158,6 +158,7 @@ int main(int argc, char *argv[])
 {
 	int ret = 0;
 	int qp = -1;
+	int Light_detect;
 	int Invert, Snap, Catch_YUV, RM_Mode, OSD, Light, Change_bitrate;
 	int QCAM_IRMODE;
 	int w = 1280, h = 720;
@@ -246,7 +247,7 @@ int main(int argc, char *argv[])
 		}
 
 	}
-	printf("show the chn %d\n",chn.channelId);
+	printf("show the chn %d\n", chn.channelId);
 
 	switch (chn.channelId) {
 	case 0:
@@ -341,7 +342,7 @@ int main(int argc, char *argv[])
 	}
 
 	ret = QCamVideoInput_AddChannel(chn);
-	printf("add chn %d\n",chn.channelId);
+	printf("add chn %d\n", chn.channelId);
 	if (ret) {
 		printf("QCamVideoInput_AddChannel failed %d\n", ret);
 		goto out;
@@ -364,6 +365,7 @@ int main(int argc, char *argv[])
 		printf("QCamVideoInput_SetOSD failed %d\n", ret);
 		goto out;
 	}
+mul_exit:
 
 	if (Change_bitrate && (chn.bitrate != Change_bitrate)) {
 		if (!chn.vbr)
@@ -375,7 +377,6 @@ int main(int argc, char *argv[])
 			goto out;
 		}
 	}
-mul_exit:
 
 	if (Catch_YUV) {
 		ret = test(0, w, h);
@@ -400,10 +401,14 @@ mul_exit:
 	}
 
 	if (Light) {
-		ret = QCamVideoInput_HasLight();
+		Light_detect = QCamVideoInput_HasLight();
 		printf("Detect the input Light.\n");
-		if (ret) {
-			printf("QCamVideoInput_HasLight failed %d\n", ret);
+		if (Light_detect == QCAM_VIDEO_DAY)
+			printf("QCamVideoInput_HasLight.\n");
+		if (Light_detect == QCAM_VIDEO_NIGHT)
+			printf("QCamVideoInput is Night.\n");
+		if (Light_detect == -1) {
+			printf("QCamVideoInput_HasLight detect failed.\n");
 			goto out;
 		}
 	}
@@ -420,7 +425,7 @@ mul_exit:
 		int w1 = 640;
 		int h1 = 360;
 
-		ret= QCamJpeg_Init(w1,h1);
+		ret = QCamJpeg_Init(w1, h1);
 		if (ret < 0) {
 			printf("Jpeg init failed\n");
 			goto out;
@@ -432,7 +437,7 @@ mul_exit:
 			goto out;
 		}
 
-		ret= QCamJpeg_Uinit();
+		ret = QCamJpeg_Uninit();
 		if (ret < 0) {
 			printf("Jpeg uninit failed\n");
 			goto out;
